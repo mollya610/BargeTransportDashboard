@@ -1,0 +1,9 @@
+dash
+pandas
+numpy
+plotly
+geopandas
+shapely
+requests
+openpyxl
+pyproj
