@@ -1,9 +1,8 @@
 import requests
-import zipfile
-import os
-import io
-import time
-import geopandas as gpd
+import pandas as pd
+from pathlib import Path
+
+SCRIPT_DIR = Path(__file__).resolve().parent
 
 # GET ALL IDS 
 url = "https://services7.arcgis.com/n1YM8pTrFmm7L4hs/arcgis/rest/services/eHydro_Survey_Data/FeatureServer/0/query"
@@ -25,11 +24,15 @@ lm_ids_all = [i for i in all_ids if str(i).startswith("LM")]
 um_ids_all = [i for i in all_ids if str(i).startswith("UM")]
 
 # SEE IF ANY IDS ARE NEW 
-old_lm = pd.read_csv('lm_ids_done.csv')
-old_um = pd.read_csv('um_ids_done.csv')
+old_lm = pd.read_csv(SCRIPT_DIR / 'lm_ids_done.csv')
+old_um = pd.read_csv(SCRIPT_DIR / 'um_ids_done.csv')
 old_lm_set = set(old_lm['ID'])
 old_um_set = set(old_um['ID'])
 new_lm_ids = [i for i in lm_ids_all if i not in old_lm_set]
 new_um_ids = [i for i in um_ids_all if i not in old_um_set]
-print(f'there are {len(new_lm_ids)} new lower mspi river surveys')
+
+pd.DataFrame({"ID": new_lm_ids}).to_csv(SCRIPT_DIR / "new_lm_ids.csv",index=False)
+pd.DataFrame({"ID": new_um_ids}).to_csv(SCRIPT_DIR / "new_um_ids.csv",index=False)
+
+print(f'there are {len(new_lm_ids)} new lower mspi river surveys') 
 print(f'there are {len(new_um_ids)} new upper mspi river surveys')
