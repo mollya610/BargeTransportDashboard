@@ -17,6 +17,9 @@ BASE_URL = "https://ehydroprod.blob.core.usgovcloudapi.net/ehydro-surveys/"
 DISTRICTS_L = ['CEMVM/', 'CEMVK/', 'CEMVS/','CEMVK/CEMVK_DIS_', 'CEMVS/CEMVS_DIS_', 'CEMVM/CEMVM_DIS_']
 DISTRICTS_U = ['CEMVP/', 'CEMVP/CEMVP_DIS_', 'CEMVR', 'CEMVR/CEMVR_DIS_', 'CEMVS/', 'CEMVS/CEMVS_DIS_']
 
+SURVEYPOINT_DIR = DATA_DIR / "SurveyPointLayers"
+SURVEYPOINT_DIR.mkdir(exist_ok=True)
+
 NEW_IDS_LM = DATA_DIR / "new_lm_ids.csv"
 NEW_IDS_UM = DATA_DIR / "new_um_ids.csv"
 METADATA_FILE = DATA_DIR / "survey_metadata.csv"
@@ -127,6 +130,31 @@ for num in range(2):
             if pdf_files:
                 with z.open(pdf_files[0]) as f:
                     datum_pdf = get_datum_from_pdf(f)
+
+            # ------ Get Survey Point Layer
+            gdb_folders = [n for n in z.namelist() if n.endswith(".gdb/")]
+            if gdb_folders:
+                gdb_name = gdb_folders[0]  # usually only one
+                # extract the .gdb folder to a temp location
+                extract_path = SURVEYPOINT_DIR / f"{survey_id}_gdb"
+                extract_path.mkdir(exist_ok=True)
+                for file_name in z.namelist():
+                    if file_name.startswith(gdb_name):
+                        z.extract(file_name, path=extract_path)
+                gdb_path = extract_path / gdb_name
+                try:
+                    # read SurveyPoint layer
+                    gdf_points = gpd.read_file(gdb_path, layer="SurveyPoint")
+                    # optionally, convert CRS to something standard like EPSG:3857
+                    gdf_points = gdf_points.to_crs(epsg=3857)
+                    # save as GPKG
+                    out_file = SURVEYPOINT_DIR / f"{survey_id}_SurveyPoint.gpkg"
+                    gdf_points.to_file(out_file, driver="GPKG")
+                    print(f"Saved SurveyPoint layer for {survey_id} -> {out_file}")
+                except Exception as e:
+                    print(f"No SurveyPoint layer for {survey_id} or error: {e}")
+            else:
+                print(f"No .gdb found in {survey_id} ZIP")
         
         # ---------- Decide final datum ------------------
         if datum_xyz == "Unknown" and datum_pdf == "Unknown":
