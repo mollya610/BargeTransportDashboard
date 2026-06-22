@@ -24,6 +24,9 @@ SURVEYPOINT_DIR.mkdir(exist_ok=True)
 NEW_IDS_LM = DATA_DIR / "new_lm_ids.csv"
 NEW_IDS_UM = DATA_DIR / "new_um_ids.csv"
 METADATA_FILE = DATA_DIR / "survey_metadata.csv"
+FAILED_FILE = DATA_DIR / "failed_surveys.csv"
+LM_DONE_FILE = SCRIPT_DIR / "lm_ids_done.csv"
+UM_DONE_FILE = SCRIPT_DIR / "um_ids_done.csv"
 
 # ---------------------------
 # FUNCTION FOR XYZ FILE DATUM 
@@ -87,18 +90,24 @@ new_ids_lm = lm_ids_df['ID'].tolist()
 new_ids_um = um_ids_df['ID'].tolist()
 
 metadata_rows = []
+failed_rows = []
+processed_ids_lm = []
+processed_ids_um = []
 
-# ------ READ IN LOWER and UPPER MSPI FILES 
+# ------ READ IN LOWER and UPPER MSPI FILES
 for num in range(2):
     if num == 0:
-        # lower first 
-        new_ids = new_ids_lm 
+        # lower first
+        new_ids = new_ids_lm
         DISTRICTS = DISTRICTS_L
+        processed_ids = processed_ids_lm
     if num == 1:
         # upper next
-        new_ids = new_ids_um 
+        new_ids = new_ids_um
         DISTRICTS = DISTRICTS_U
+        processed_ids = processed_ids_um
     for survey_id in new_ids:
+        processed_ids.append(survey_id)
         datum_xyz = "Unknown"
         datum_pdf = "Unknown"
         datum = '?'
@@ -120,8 +129,10 @@ for num in range(2):
         
         if zip_content is None:
             print(f"Could not find ZIP for {survey_id}")
+            failed_rows.append({"survey_id": survey_id, "reason": "No ZIP found"})
             continue
-                
+
+        gpkg_saved = False
         # ------- now open zipfiles if the url was read -----
         with zipfile.ZipFile(io.BytesIO(zip_content)) as z:
             # ----- Check XYZ
@@ -156,11 +167,14 @@ for num in range(2):
                     out_file = SURVEYPOINT_DIR / f"{survey_id}_SurveyPoint.gpkg"
                     gdf_points.to_file(out_file, driver="GPKG")
                     print(f"Saved SurveyPoint layer for {survey_id} -> {out_file}")
+                    gpkg_saved = True
                 except Exception as e:
                     print(f"No SurveyPoint layer for {survey_id} or error: {e}")
+                    failed_rows.append({"survey_id": survey_id, "reason": f"SurveyPoint extraction error: {e}"})
             else:
                 print(f"No .gdb found in {survey_id} ZIP")
-        
+                failed_rows.append({"survey_id": survey_id, "reason": "No .gdb found in ZIP"})
+
         # ---------- Decide final datum ------------------
         if datum_xyz == "Unknown" and datum_pdf == "Unknown":
             datum_final = "Unknown"
@@ -189,3 +203,26 @@ for num in range(2):
 metadata_df = pd.DataFrame(metadata_rows)
 metadata_df.to_csv(METADATA_FILE, index=False)
 print(f"Metadata saved to {METADATA_FILE}")
+
+# ------- Track every attempted survey as "done" so it isn't re-checked,
+# and log failures separately for manual review -------
+def append_ids(file_path, new_ids):
+    if not new_ids:
+        return
+    if file_path.exists():
+        existing = pd.read_csv(file_path)['ID'].tolist()
+    else:
+        existing = []
+    combined = pd.DataFrame({"ID": existing + new_ids}).drop_duplicates(subset="ID")
+    combined.to_csv(file_path, index=False)
+
+append_ids(LM_DONE_FILE, processed_ids_lm)
+append_ids(UM_DONE_FILE, processed_ids_um)
+print(f"Marked {len(processed_ids_lm)} LM and {len(processed_ids_um)} UM surveys as done")
+
+if failed_rows:
+    failed_df = pd.DataFrame(failed_rows)
+    if FAILED_FILE.exists():
+        failed_df = pd.concat([pd.read_csv(FAILED_FILE), failed_df]).drop_duplicates(subset="survey_id", keep="last")
+    failed_df.to_csv(FAILED_FILE, index=False)
+    print(f"{len(failed_rows)} surveys failed this run, logged to {FAILED_FILE}")
