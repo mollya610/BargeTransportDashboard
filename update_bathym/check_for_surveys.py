@@ -7,8 +7,11 @@ DATA_DIR = SCRIPT_DIR / "data"
 DATA_DIR.mkdir(exist_ok=True)
 
 # GET ALL LM/UM IDS (filter server-side instead of pulling every district nationwide)
+# usacedistrictcode restricts to the 5 Mississippi Valley Division districts -
+# LM/UM prefixes alone aren't unique to the Mississippi (e.g. CENAN reuses "LM_" for Lake Montauk)
+MVD_DISTRICTS = "'CEMVM','CEMVK','CEMVS','CEMVP','CEMVR'"
 url = "https://services7.arcgis.com/n1YM8pTrFmm7L4hs/arcgis/rest/services/eHydro_Survey_Data/FeatureServer/0/query"
-params = {"f": "json","where": "surveyjobidpk LIKE 'LM%' OR surveyjobidpk LIKE 'UM%'",
+params = {"f": "json","where": f"usacedistrictcode IN ({MVD_DISTRICTS}) AND (surveyjobidpk LIKE 'LM%' OR surveyjobidpk LIKE 'UM%')",
     "outFields": "surveyjobidpk","resultOffset": 0,
     "resultRecordCount": 2000,
     "returnGeometry": "false"}

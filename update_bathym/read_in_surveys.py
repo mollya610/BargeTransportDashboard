@@ -2,6 +2,7 @@ import requests
 import zipfile
 import io
 import pandas as pd
+import geopandas as gpd
 from pathlib import Path
 import pdfplumber
 import sys
@@ -15,7 +16,7 @@ RAW_XYZ_DIR.mkdir(exist_ok=True)
 
 BASE_URL = "https://ehydroprod.blob.core.usgovcloudapi.net/ehydro-surveys/"
 DISTRICTS_L = ['CEMVM/', 'CEMVK/', 'CEMVS/','CEMVK/CEMVK_DIS_', 'CEMVS/CEMVS_DIS_', 'CEMVM/CEMVM_DIS_']
-DISTRICTS_U = ['CEMVP/', 'CEMVP/CEMVP_DIS_', 'CEMVR', 'CEMVR/CEMVR_DIS_', 'CEMVS/', 'CEMVS/CEMVS_DIS_']
+DISTRICTS_U = ['CEMVP/', 'CEMVP/CEMVP_DIS_', 'CEMVR/', 'CEMVR/CEMVR_DIS_', 'CEMVS/', 'CEMVS/CEMVS_DIS_']
 
 SURVEYPOINT_DIR = DATA_DIR / "SurveyPointLayers"
 SURVEYPOINT_DIR.mkdir(exist_ok=True)
@@ -38,6 +39,8 @@ def get_datum_from_xyz(text: str):
                 return "LWRP2007"
             elif "Dredging Reference Plane" in text_line:
                 return "DredgingRef"
+            elif "actual depth" in text_line.lower():
+                return "ACTUALDEPTH"
             else:
                 return f"Unknown (found: {text_line})"
     return "Unknown"
@@ -60,6 +63,8 @@ def get_datum_from_pdf(fobj):
             return "LWRP2014"
         elif "2007 low water reference plane" in text:
             return "LWRP2007"
+        elif "actual depth" in text:
+            return "ACTUALDEPTH"
         else:
             return "Unknown"
     except Exception as e:
