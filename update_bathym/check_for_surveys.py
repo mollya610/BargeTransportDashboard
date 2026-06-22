@@ -3,10 +3,12 @@ import pandas as pd
 from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
+DATA_DIR = SCRIPT_DIR / "data"
+DATA_DIR.mkdir(exist_ok=True)
 
-# GET ALL IDS 
+# GET ALL LM/UM IDS (filter server-side instead of pulling every district nationwide)
 url = "https://services7.arcgis.com/n1YM8pTrFmm7L4hs/arcgis/rest/services/eHydro_Survey_Data/FeatureServer/0/query"
-params = {"f": "json","where": "1=1", 
+params = {"f": "json","where": "surveyjobidpk LIKE 'LM%' OR surveyjobidpk LIKE 'UM%'",
     "outFields": "surveyjobidpk","resultOffset": 0,
     "resultRecordCount": 2000,
     "returnGeometry": "false"}
@@ -31,8 +33,8 @@ old_um_set = set(old_um['ID'])
 new_lm_ids = [i for i in lm_ids_all if i not in old_lm_set]
 new_um_ids = [i for i in um_ids_all if i not in old_um_set]
 
-pd.DataFrame({"ID": new_lm_ids}).to_csv(SCRIPT_DIR / "new_lm_ids.csv",index=False)
-pd.DataFrame({"ID": new_um_ids}).to_csv(SCRIPT_DIR / "new_um_ids.csv",index=False)
+pd.DataFrame({"ID": new_lm_ids}).to_csv(DATA_DIR / "new_lm_ids.csv",index=False)
+pd.DataFrame({"ID": new_um_ids}).to_csv(DATA_DIR / "new_um_ids.csv",index=False)
 
 print(f'there are {len(new_lm_ids)} new lower mspi river surveys') 
 print(f'there are {len(new_um_ids)} new upper mspi river surveys')
