@@ -1,7 +1,4 @@
-import glob
 import math
-import os
-import sys
 from pathlib import Path
 
 import geopandas as gpd
@@ -10,21 +7,17 @@ import pandas as pd
 
 # ---------------- CONFIG ----------------
 SCRIPT_DIR = Path(__file__).resolve().parent
+REPO_ROOT = SCRIPT_DIR.parent
 DATA_DIR = SCRIPT_DIR / "data"
 NAVD88_DIR = DATA_DIR / "NAVD88Files"  # output of process_surveys.py
 
 CORRIDOR_FILE = SCRIPT_DIR / "ais_grid_counts_clean5.csv"
 DATUMS_FILE = SCRIPT_DIR / "datum_info.csv"
+CLEAN_BATHYMETRY_FILE = REPO_ROOT / "clean_bathymetry.csv"  # what app.py maps
 
 UTM_CRS = "EPSG:26915"
 GRID_CELL_M = 75  # ais_grid_counts_clean5.csv cell spacing, inferred from the x/y values
 GRID_MATCH_DIST_M = (GRID_CELL_M / 2) * math.sqrt(2)  # half-diagonal: farthest a point can be from its cell's center
-
-N_CHUNKS = 15
-
-if len(sys.argv) < 2:
-    sys.exit("usage: python compute_bathym_stats.py <chunk_idx 0-14>")
-chunk_idx = int(sys.argv[1])
 
 # ---------------- LOAD SUPPORT DATA ----------------
 corridor_df = pd.read_csv(CORRIDOR_FILE)
@@ -40,23 +33,26 @@ datums = gpd.GeoDataFrame(
 )
 datums_utm = datums.to_crs(UTM_CRS)
 
-# ---------------- GET FILES TO PROCESS ----------------
-files = sorted(glob.glob(os.path.join(NAVD88_DIR, "*_SurveyPoint.gpkg")))
-chunks = np.array_split(files, N_CHUNKS)
-chunk_files = chunks[chunk_idx]
+# ---------------- SKIP SURVEYS ALREADY IN clean_bathymetry.csv ----------------
+if CLEAN_BATHYMETRY_FILE.exists():
+    existing = pd.read_csv(CLEAN_BATHYMETRY_FILE, index_col=0)
+    done_files = set(existing["file"])
+else:
+    existing = pd.DataFrame()
+    done_files = set()
 
-output_file = DATA_DIR / f"chunk{chunk_idx}_stats.csv"
-print(f"Processing chunk {chunk_idx + 1}/{N_CHUNKS}, {len(chunk_files)} files")
+files = sorted(NAVD88_DIR.glob("*_SurveyPoint.gpkg"))
+new_files = [f for f in files if f.name not in done_files]
+print(f"{len(new_files)} new survey(s) to process ({len(files)} total in NAVD88Files)")
 
 rows = []
-for fpath in chunk_files:
-    fpath = Path(fpath)
+for fpath in new_files:
     gdf = gpd.read_file(fpath)  # EPSG:3857, written by read_in_surveys.py
     gdf = gdf.to_crs(epsg=4326)
 
     date = gdf["SurveyDateStamp"].iloc[0]
     segment_id = gdf["segment_id"].iloc[0]  # assigned in process_surveys.py
-    print(date)
+    print(f"{fpath.name}: {date}")
 
     poly_tosave = gdf.union_all().convex_hull
     midpoint = gdf.union_all().envelope.centroid
@@ -82,8 +78,10 @@ for fpath in chunk_files:
     rows.append({
         "file": fpath.name,
         "date": date,
+        "year": pd.to_datetime(date).year,
         "datum": "NAVD88",
         "bathym_mean": bathym_mean,
+        "depth": water_elev - bathym_mean,
         "milemarker": milemarker,
         "segment_id": segment_id,
         "water_elev": water_elev,
@@ -91,7 +89,14 @@ for fpath in chunk_files:
         "geometry": poly_tosave.wkt,
     })
 
-# --- save results ---
-df = pd.DataFrame(rows)
-df.to_csv(output_file, index=False)
-print(f"Saved summary to {output_file}")
+if not rows:
+    print("No new surveys to add.")
+else:
+    new_df = pd.DataFrame(rows)
+    # no vessel-weighted bathymetry means no usable depth -> drop rather than map a NaN point
+    skipped = new_df["bathym_mean"].isna().sum()
+    new_df = new_df.dropna(subset=["bathym_mean"])
+
+    combined = pd.concat([existing, new_df], ignore_index=True)
+    combined.to_csv(CLEAN_BATHYMETRY_FILE)
+    print(f"Added {len(new_df)} survey(s) to {CLEAN_BATHYMETRY_FILE} ({skipped} skipped, no AIS coverage)")
