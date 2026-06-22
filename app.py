@@ -1,4 +1,5 @@
 import os
+import textwrap
 import dash
 from dash import dcc, html, Input, Output
 import geopandas as gpd
@@ -12,21 +13,50 @@ from shapely import wkt
 
 # LOAD DATA
 bathy = pd.read_csv("clean_bathymetry.csv")
-dredge = pd.read_csv("dredge_data_2022.csv")
 
 # Ensure year is int
 bathy["year"] = bathy["year"].astype(int)
-dredge["year"] = 2022
+bathy["date_dt"] = pd.to_datetime(bathy["date"]).dt.tz_localize(None)
 
 years = sorted(bathy["year"].unique())
 years = [int(y) for y in years]
 
-# get center point for bathym measures 
+# get center point for bathym measures
 bathy["geometry"] = bathy["geometry"].apply(wkt.loads)
 bathy = gpd.GeoDataFrame(bathy, geometry="geometry", crs="EPSG:4326")
 bathy["rep_point"] = bathy.geometry.representative_point()
 bathy["LON"] = bathy["rep_point"].apply(lambda p: p.x)
 bathy["LAT"] = bathy["rep_point"].apply(lambda p: p.y)
+
+# get navigation notices (dredging/shoaling/draft restriction) and locate them via mile markers
+NOTICE_CATEGORIES = ["dredging", "shoaling", "draft restriction"]
+CATEGORY_COLORS = {"dredging": "#1b9e77", "shoaling": "#756bb1", "draft restriction": "#8c510a"}
+
+notices = pd.read_csv("notice_to_mariners/data/relevant_notices.csv")
+notices["date"] = pd.to_datetime(notices["date_time_published_gmt"])
+notices["year"] = notices["date"].dt.year
+notices["date_str"] = notices["date"].dt.strftime("%Y-%m-%d")
+notices = notices.dropna(subset=["river_name", "mile_marker_min", "mile_marker_max"]).copy()
+# the mile-marker reference table is spaced ~1 mile apart, so round each notice's
+# (possibly fractional, possibly range-midpoint) marker to the nearest one to join on
+notices["mile_marker"] = ((notices["mile_marker_min"] + notices["mile_marker_max"]) / 2).round().astype(int)
+
+mile_lookup = (
+    pd.read_csv("update_bathym/usace_river_mile_markers.csv")
+    .groupby(["RIVER_NAME", "MILE"])[["LON", "LAT"]].mean()
+)
+notices = notices.join(mile_lookup, on=["river_name", "mile_marker"]).dropna(subset=["LON", "LAT"])
+
+# ordered points per river, used to draw draft-restriction notices as a shaded line along
+# every mile marker they cover instead of a single dot
+river_mile_points = mile_lookup.reset_index().sort_values(["RIVER_NAME", "MILE"])
+
+# a notice can match more than one category ("shoaling;draft restriction") - explode so
+# each gets its own marker, colored and toggled independently of the others
+notices = notices.assign(category=notices["categories"].str.split(";")).explode("category")
+notices["notes_short"] = notices["notes"].str.slice(0, 300).apply(
+    lambda t: "<br>".join(textwrap.wrap(t, width=60))
+)
 
 # get barge rate data  
 url = "https://www.ams.usda.gov/sites/default/files/media/GTRFigure10Table9.xlsx"
@@ -166,16 +196,18 @@ app.layout = html.Div(
 
                                 # Layers checklist
                                 html.Div(
-                                    style={"width": "150px"},
+                                    style={"width": "420px"},
                                     children=[
                                         html.Label("Layers"),
                                         dcc.Checklist(
                                             id="layer-toggle",
                                             options=[
                                                 {"label": "Bathymetry", "value": "bathy"},
-                                                {"label": "Dredging", "value": "dredge"},
+                                                {"label": "Dredging", "value": "dredging"},
+                                                {"label": "Shoaling", "value": "shoaling"},
+                                                {"label": "Draft Restriction", "value": "draft restriction"},
                                             ],
-                                            value=["bathy", "dredge"],
+                                            value=["bathy", "dredging", "shoaling", "draft restriction"],
                                             inline=True
                                         )
                                     ]
@@ -276,20 +308,13 @@ app.layout = html.Div(
 def update_map(year, layers):
 
     fig = go.Figure()
-    if year == thisyear: 
-        df_b = bathy[(bathy["date"] >= start_date) &(bathy["date"] <= end_date)]
-        df_d = dredge[(dredge["date"] >= start_date) &(dredge["date"] <= end_date)]
-    else: 
+    if year == thisyear:
+        df_b = bathy[(bathy["date_dt"] >= start_date) &(bathy["date_dt"] <= end_date)]
+        df_n = notices[(notices["date"] >= start_date) & (notices["date"] <= end_date)]
+    else:
         df_b = bathy[bathy['year']==year]
-        df_d = dredge[dredge['year']==year]
-    conditions = [
-    df_b["depth"] > 30,(df_b["depth"] > 25) & (df_b["depth"] <= 30),
-    (df_b["depth"] > 20) & (df_b["depth"] <= 25),(df_b["depth"] > 15) & (df_b["depth"] <= 20),
-    df_b["depth"] <= 15]
-    sizes = [8, 10, 12, 15, 18] 
-    df_b["marker_size"] = np.select(conditions, sizes)
-    
-    # plot river 
+        df_n = notices[notices['year']==year]
+    # plot river
     fig.add_trace(
     go.Scattermap(
         lon=lons,
@@ -304,54 +329,101 @@ def update_map(year, layers):
         showlegend=False
     )
 )
-    
-    #  bathym layer 
-    fig.add_trace(
-        go.Scattermap(
-            lon=df_b["LON"],
-            lat=df_b["LAT"],
-            mode="markers",
-            marker=dict(
-                size=df_b["marker_size"],
-                color=df_b["depth"],
-                colorscale="YlOrRd",
-                reversescale=True,
-                cmin=0,
-                cmax=40,
-                #colorbar=dict(title="Depth (ft)"),
-                opacity=0.7,
-            ),
-            showlegend=False,
-            customdata=df_b[["date"]],
-            name="Bathymetry",
-            hovertemplate=(
-                "Depth: %{marker.color:.1f} ft<br>"
-                "Date: %{customdata[0]}<extra></extra>"
-            )
-        )
-    )
 
-    # dredge layer 
-    fig.add_trace(
-        go.Scattermap(
-            lon=df_d["LON"],
-            lat=df_d["LAT"],
-            mode="markers",
-            marker=dict(
-                size=5,
-                color="green",
-                #symbol="^",
-                opacity=0.9,
-            ),
-            customdata=df_d[["BaseDateTime"]],
-            showlegend=False,
-            name="Dredging Locations",
-            hovertemplate=(
-                "Dredging Site<br>"
-                "Date: %{customdata[0]}<extra></extra>"
+    #  bathym layer
+    if "bathy" in layers:
+        conditions = [
+        df_b["depth"] > 30,(df_b["depth"] > 25) & (df_b["depth"] <= 30),
+        (df_b["depth"] > 20) & (df_b["depth"] <= 25),(df_b["depth"] > 15) & (df_b["depth"] <= 20),
+        df_b["depth"] <= 15]
+        sizes = [8, 10, 12, 15, 18]
+        df_b["marker_size"] = np.select(conditions, sizes)
+        fig.add_trace(
+            go.Scattermap(
+                lon=df_b["LON"],
+                lat=df_b["LAT"],
+                mode="markers",
+                marker=dict(
+                    size=df_b["marker_size"],
+                    color=df_b["depth"],
+                    colorscale="YlOrRd",
+                    reversescale=True,
+                    cmin=0,
+                    cmax=40,
+                    #colorbar=dict(title="Depth (ft)"),
+                    opacity=0.7,
+                ),
+                showlegend=False,
+                customdata=df_b[["date"]],
+                name="Bathymetry",
+                hovertemplate=(
+                    "Depth: %{marker.color:.1f} ft<br>"
+                    "Date: %{customdata[0]}<extra></extra>"
+                )
             )
         )
-    )
+
+    # notice layers - one trace per category so each can be toggled and colored on its own
+    for category in NOTICE_CATEGORIES:
+        if category not in layers:
+            continue
+        df_cat = df_n[df_n["category"] == category]
+
+        if category == "draft restriction":
+            # these apply along a whole stretch of river, not a single point - draw each
+            # notice as a shaded line covering every mile marker it affects
+            for i, (_, row) in enumerate(df_cat.iterrows()):
+                seg = river_mile_points[
+                    (river_mile_points["RIVER_NAME"] == row["river_name"]) &
+                    (river_mile_points["MILE"] >= row["mile_marker_min"]) &
+                    (river_mile_points["MILE"] <= row["mile_marker_max"])
+                ]
+                if seg.empty:
+                    continue
+                fig.add_trace(
+                    go.Scattermap(
+                        lon=seg["LON"],
+                        lat=seg["LAT"],
+                        mode="lines",
+                        line=dict(color=CATEGORY_COLORS[category], width=10),
+                        opacity=0.4,
+                        legendgroup="draft restriction",
+                        showlegend=(i == 0),
+                        name="Draft Restriction",
+                        hoverinfo="text",
+                        hovertext=(
+                            "<b>Draft Restriction</b><br>"
+                            f"Date: {row['date_str']}<br>"
+                            f"Notice: {row['message_id']}<br>"
+                            f"Mile Marker(s): {row['mile_markers']}<br>"
+                            f"{row['notes_short']}"
+                        ),
+                    )
+                )
+            continue
+
+        fig.add_trace(
+            go.Scattermap(
+                lon=df_cat["LON"],
+                lat=df_cat["LAT"],
+                mode="markers",
+                marker=dict(
+                    size=10,
+                    color=CATEGORY_COLORS[category],
+                    opacity=0.85,
+                ),
+                customdata=df_cat[["date_str", "message_id", "mile_markers", "notes_short"]],
+                showlegend=True,
+                name=category.title(),
+                hovertemplate=(
+                    f"<b>{category.title()}</b><br>"
+                    "Date: %{customdata[0]}<br>"
+                    "Notice: %{customdata[1]}<br>"
+                    "Mile Marker(s): %{customdata[2]}<br>"
+                    "%{customdata[3]}<extra></extra>"
+                )
+            )
+        )
 
     # map layout 
     fig.update_layout(
