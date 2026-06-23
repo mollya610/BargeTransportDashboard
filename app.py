@@ -1,7 +1,7 @@
 import os
 import textwrap
 import dash
-from dash import dcc, html, Input, Output
+from dash import dcc, html, Input, Output, State
 import geopandas as gpd
 import plotly.graph_objects as go
 from shapely.ops import linemerge
@@ -12,7 +12,7 @@ import pandas as pd
 from shapely import wkt
 
 # LOAD DATA
-bathy = pd.read_csv("clean_bathymetry.csv")
+bathy = pd.read_csv("bathym_fixed.csv")
 
 # Ensure year is int
 bathy["year"] = bathy["year"].astype(int)
@@ -158,133 +158,199 @@ app.title = "Mississippi River Bathymetry & Dredging"
 # LAYOUT
 # --------------------------------------------------
 
+# Style constants for the slide-out plots panel
+PLOTS_PANEL_WIDTH = "420px"
+PLOTS_PANEL_CLOSED = {
+    "position": "absolute", "top": "0", "right": "0", "height": "100%",
+    "width": "0", "overflow": "hidden",
+    "background": "rgba(255,255,255,0.97)",
+    "box-shadow": "none",
+    "transition": "width 0.25s ease",
+    "zIndex": "15",
+}
+PLOTS_PANEL_OPEN = {
+    **PLOTS_PANEL_CLOSED,
+    "width": PLOTS_PANEL_WIDTH,
+    "box-shadow": "-2px 0 6px rgba(0,0,0,0.3)",
+    "padding": "20px",
+    "overflow-y": "auto",
+}
+
 app.layout = html.Div(
-    style={"width": "95%", "margin": "auto"},
+    style={"width": "100%", "margin": "0", "padding": "0"},
     children=[
-        html.H2("Mississippi River Bathymetry & Dredging"),
+
+        # Title bar
+        html.Div(
+            style={
+                "width": "100%",
+                "padding": "15px 0",
+                "background": "#1b3a5c",
+                "text-align": "center",
+            },
+            children=[
+                html.H2(
+                    "Mississippi River Bathymetry & Dredging",
+                    style={"margin": 0, "color": "white"}
+                )
+            ]
+        ),
+
+        dcc.Store(id="plots-panel-store", data=False),
 
         ##################################
-        # Parent Div: splits page into left and right columns
+        # Map fills the full width; controls and plots panel float on top of it
         html.Div(
-            style={"display": "flex", "gap": "20px"}, 
+            style={"position": "relative", "width": "100%", "height": "92vh"},
             children=[
 
-                ################ 
-                # LEFT COLUMN: controls + map
-                html.Div(  
-                    style={"flex": "5","display": "flex", "flex-direction": "column", "gap": "20px","height": "95vh"},
+                # Map, edge to edge
+                dcc.Graph(id="map", style={"height": "100%", "width": "100%"}),
+
+                # Controls overlay, floating on top of the map
+                html.Div(
+                    style={
+                        "position": "absolute",
+                        "top": "15px",
+                        "left": "15px",
+                        "zIndex": "10",
+                        "display": "flex",
+                        "flex-direction": "column",
+                        "gap": "10px",
+                        "background": "rgba(255,255,255,0.9)",
+                        "padding": "10px 15px",
+                        "border-radius": "8px",
+                        "box-shadow": "0 1px 4px rgba(0,0,0,0.3)"
+                    },
                     children=[
-
-                        # Top controls row
+                        # Year dropdown
                         html.Div(
-                            style={"display": "flex", "gap": "30px", "margin-bottom": "10px", "align-items": "center"},
+                            style={"width": "220px"},
                             children=[
-                                # Year dropdown
-                                html.Div(
-                                    style={"width": "90px"},
-                                    children=[
-                                        html.Label("Select Year"),
-                                        dcc.Dropdown(
-                                            id="year-slider",
-                                            options=[{"label": str(y), "value": y} for y in years],
-                                            value=years[0],
-                                            clearable=False,
-                                            style={"height": "40px", "font-size": "15px"}
-                                        )
-                                    ]
-                                ),
-
-                                # Layers checklist
-                                html.Div(
-                                    style={"width": "420px"},
-                                    children=[
-                                        html.Label("Layers"),
-                                        dcc.Checklist(
-                                            id="layer-toggle",
-                                            options=[
-                                                {"label": "Bathymetry", "value": "bathy"},
-                                                {"label": "Dredging", "value": "dredging"},
-                                                {"label": "Shoaling", "value": "shoaling"},
-                                                {"label": "Draft Restriction", "value": "draft restriction"},
-                                            ],
-                                            value=["bathy", "dredging", "shoaling", "draft restriction"],
-                                            inline=True
-                                        )
-                                    ]
-                                ),
-
-                                # Colorbar
-                                html.Div(
-                                    style={"width": "200px"},
-                                    children=[
-                                        dcc.Graph(
-                                            id="colorbar",
-                                            figure={
-                                                "data": [
-                                                    go.Scatter(
-                                                        x=[None],
-                                                        y=[None],
-                                                        mode='markers',
-                                                        marker=dict(
-                                                            colorscale="YlOrRd",
-                                                            cmin=0,
-                                                            cmax=40,
-                                                            colorbar=dict(
-                                                                title="Depth (ft)",
-                                                                orientation="h",
-                                                                thickness=10,
-                                                                len=1.0,
-                                                            ),
-                                                            size=0
-                                                        ),
-                                                        showlegend=False
-                                                    )
-                                                ],
-                                                "layout": go.Layout(
-                                                    margin=dict(l=0, r=0, t=0, b=0),
-                                                    height=50,
-                                                )
-                                            },
-                                            config={"displayModeBar": False},
-                                            style={"height": "60px"}
-                                        )
-                                    ]
+                                html.Label("Select Year"),
+                                dcc.Dropdown(
+                                    id="year-slider",
+                                    options=[{"label": str(y), "value": y} for y in years],
+                                    value=thisyear if thisyear in years else years[-1],
+                                    clearable=False,
+                                    style={"height": "40px", "font-size": "15px"}
                                 )
                             ]
                         ),
 
-                        # Map below controls
+                        # Layers dropdown (multi-select)
                         html.Div(
-                            style={"height": "80vh"},
+                            style={"width": "220px"},
                             children=[
-                                dcc.Graph(id="map", style={"height": "100%"})
+                                html.Label("Layers"),
+                                dcc.Dropdown(
+                                    id="layer-toggle",
+                                    options=[
+                                        {"label": "Bathymetry", "value": "bathy"},
+                                        {"label": "Dredging", "value": "dredging"},
+                                        {"label": "Shoaling", "value": "shoaling"},
+                                        {"label": "Draft Restriction", "value": "draft restriction"},
+                                    ],
+                                    value=["bathy", "dredging", "shoaling", "draft restriction"],
+                                    multi=True,
+                                    clearable=False,
+                                    style={"font-size": "14px"}
+                                )
                             ]
                         )
-
                     ]
                 ),
 
-                ################
-                # RIGHT COLUMN: plots
+                # Colorbar overlay, grouped with the map's legend in the bottom-left corner
                 html.Div(
-                    style={"flex": "4", "display": "flex", "flex-direction": "column", "gap": "20px","height": "90vh","overflow-y": "scroll"},
+                    style={
+                        "position": "absolute",
+                        "bottom": "50px",
+                        "left": "10px",
+                        "zIndex": "10",
+                        "width": "160px",
+                        "background": "rgba(255,255,255,0.8)",
+                        "padding": "4px 10px 6px 6px",
+                        "border-radius": "0",
+                        "box-shadow": "0 1px 4px rgba(0,0,0,0.3)"
+                    },
                     children=[
-                        dcc.Graph(
-                            id="barge-rate-plot",
-                            style={"height": "300px"}  # fills the column
+                        html.Div(
+                            "Depth (ft)",
+                            style={
+                                "font-family": "Arial, sans-serif",
+                                "font-size": "12px",
+                                "color": "#444",
+                                "margin-bottom": "2px"
+                            }
                         ),
                         dcc.Graph(
-                            id="water-plot",
-                            style={"height": "300px"}  # fills the column
-                        ),
-                        dcc.Graph(
-                            id="cornprice-plot",
-                            style={"height": "300px"}  # fills the column
-                        ),
-                        dcc.Graph(
-                            id="soyprice-plot",
-                            style={"height": "300px"}  # fills the column
+                            id="colorbar",
+                            figure={
+                                "data": [
+                                    go.Scatter(
+                                        x=[None],
+                                        y=[None],
+                                        mode='markers',
+                                        marker=dict(
+                                            colorscale="YlOrRd",
+                                            cmin=0,
+                                            cmax=40,
+                                            colorbar=dict(
+                                                tickfont=dict(size=12, family="Arial, sans-serif"),
+                                                orientation="h",
+                                                thickness=8,
+                                                len=0.9,
+                                                y=1, yanchor="top",
+                                            ),
+                                            size=0
+                                        ),
+                                        showlegend=False
+                                    )
+                                ],
+                                "layout": go.Layout(
+                                    margin=dict(l=0, r=0, t=0, b=0),
+                                    height=35,
+                                    paper_bgcolor="rgba(0,0,0,0)",
+                                    plot_bgcolor="rgba(0,0,0,0)",
+                                )
+                            },
+                            config={"displayModeBar": False},
+                            style={"height": "35px"}
                         )
+                    ]
+                ),
+
+                # Tab to open/close the plots panel, on the right edge of the map
+                html.Button(
+                    "☰ Plots",
+                    id="plots-toggle",
+                    n_clicks=0,
+                    style={
+                        "position": "absolute",
+                        "top": "50%",
+                        "right": "0",
+                        "transform": "translateY(-50%)",
+                        "zIndex": "20",
+                        "background": "#1b3a5c",
+                        "color": "white",
+                        "border": "none",
+                        "border-radius": "6px 0 0 6px",
+                        "padding": "12px 8px",
+                        "cursor": "pointer",
+                        "writing-mode": "vertical-rl",
+                    }
+                ),
+
+                # Plots panel, slides in over the map
+                html.Div(
+                    id="plots-panel",
+                    style=PLOTS_PANEL_CLOSED,
+                    children=[
+                        dcc.Graph(id="barge-rate-plot", style={"height": "300px"}),
+                        dcc.Graph(id="water-plot", style={"height": "300px"}),
+                        dcc.Graph(id="cornprice-plot", style={"height": "300px"}),
+                        dcc.Graph(id="soyprice-plot", style={"height": "300px"})
                         # Additional plots can be added as more children
                     ]
                 )
@@ -293,6 +359,25 @@ app.layout = html.Div(
         )
     ]
 )
+
+
+# --------------------------------------------------
+# PLOTS PANEL TOGGLE
+# --------------------------------------------------
+
+@app.callback(
+    Output("plots-panel", "style"),
+    Output("plots-panel-store", "data"),
+    Output("plots-toggle", "children"),
+    Input("plots-toggle", "n_clicks"),
+    State("plots-panel-store", "data"),
+    prevent_initial_call=True
+)
+def toggle_plots_panel(n_clicks, is_open):
+    new_state = not is_open
+    style = PLOTS_PANEL_OPEN if new_state else PLOTS_PANEL_CLOSED
+    label = "✕ Close" if new_state else "☰ Plots"
+    return style, new_state, label
 
 
 
@@ -308,12 +393,8 @@ app.layout = html.Div(
 def update_map(year, layers):
 
     fig = go.Figure()
-    if year == thisyear:
-        df_b = bathy[(bathy["date_dt"] >= start_date) &(bathy["date_dt"] <= end_date)]
-        df_n = notices[(notices["date"] >= start_date) & (notices["date"] <= end_date)]
-    else:
-        df_b = bathy[bathy['year']==year]
-        df_n = notices[notices['year']==year]
+    df_b = bathy[bathy['year']==year]
+    df_n = notices[notices['year']==year]
     # plot river
     fig.add_trace(
     go.Scattermap(
@@ -329,6 +410,40 @@ def update_map(year, layers):
         showlegend=False
     )
 )
+
+    # draft restriction lines drawn first so they sit behind bathymetry and the other notice layers
+    if "draft restriction" in layers:
+        df_draft = df_n[df_n["category"] == "draft restriction"]
+        # these apply along a whole stretch of river, not a single point - draw each
+        # notice as a shaded line covering every mile marker it affects
+        for i, (_, row) in enumerate(df_draft.iterrows()):
+            seg = river_mile_points[
+                (river_mile_points["RIVER_NAME"] == row["river_name"]) &
+                (river_mile_points["MILE"] >= row["mile_marker_min"]) &
+                (river_mile_points["MILE"] <= row["mile_marker_max"])
+            ]
+            if seg.empty:
+                continue
+            fig.add_trace(
+                go.Scattermap(
+                    lon=seg["LON"],
+                    lat=seg["LAT"],
+                    mode="lines",
+                    line=dict(color=CATEGORY_COLORS["draft restriction"], width=10),
+                    opacity=0.4,
+                    legendgroup="draft restriction",
+                    showlegend=(i == 0),
+                    name="Draft Restriction",
+                    hoverinfo="text",
+                    hovertext=(
+                        "<b>Draft Restriction</b><br>"
+                        f"Date: {row['date_str']}<br>"
+                        f"Notice: {row['message_id']}<br>"
+                        f"Mile Marker(s): {row['mile_markers']}<br>"
+                        f"{row['notes_short']}"
+                    ),
+                )
+            )
 
     #  bathym layer
     if "bathy" in layers:
@@ -364,43 +479,11 @@ def update_map(year, layers):
         )
 
     # notice layers - one trace per category so each can be toggled and colored on its own
+    # (draft restriction is drawn separately above, behind the bathymetry layer)
     for category in NOTICE_CATEGORIES:
-        if category not in layers:
+        if category == "draft restriction" or category not in layers:
             continue
         df_cat = df_n[df_n["category"] == category]
-
-        if category == "draft restriction":
-            # these apply along a whole stretch of river, not a single point - draw each
-            # notice as a shaded line covering every mile marker it affects
-            for i, (_, row) in enumerate(df_cat.iterrows()):
-                seg = river_mile_points[
-                    (river_mile_points["RIVER_NAME"] == row["river_name"]) &
-                    (river_mile_points["MILE"] >= row["mile_marker_min"]) &
-                    (river_mile_points["MILE"] <= row["mile_marker_max"])
-                ]
-                if seg.empty:
-                    continue
-                fig.add_trace(
-                    go.Scattermap(
-                        lon=seg["LON"],
-                        lat=seg["LAT"],
-                        mode="lines",
-                        line=dict(color=CATEGORY_COLORS[category], width=10),
-                        opacity=0.4,
-                        legendgroup="draft restriction",
-                        showlegend=(i == 0),
-                        name="Draft Restriction",
-                        hoverinfo="text",
-                        hovertext=(
-                            "<b>Draft Restriction</b><br>"
-                            f"Date: {row['date_str']}<br>"
-                            f"Notice: {row['message_id']}<br>"
-                            f"Mile Marker(s): {row['mile_markers']}<br>"
-                            f"{row['notes_short']}"
-                        ),
-                    )
-                )
-            continue
 
         fig.add_trace(
             go.Scattermap(
@@ -428,13 +511,17 @@ def update_map(year, layers):
     # map layout 
     fig.update_layout(
         mapbox=dict(
-            style="carto-positron",
-            zoom=7,
-            center=dict(lat=38.5, lon=-90.5),
+            style="basic",
+            zoom=8.5,
+            center=dict(lat=32.5, lon=-91.1),
         ),
         margin=dict(l=0, r=0, t=0, b=0),
         uirevision="keep-map",
-        legend=dict(bgcolor="rgba(255,255,255,0.8)")
+        legend=dict(
+            bgcolor="rgba(255,255,255,0.8)",
+            x=0.005, xanchor="left",
+            y=0.19, yanchor="bottom"
+        )
     )
     
     return fig
