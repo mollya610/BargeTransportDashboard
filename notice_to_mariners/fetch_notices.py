@@ -31,6 +31,10 @@ CATEGORY_PATTERNS = {
     "dredging": re.compile(r"dredg", re.IGNORECASE),
     "shoaling": re.compile(r"shoal", re.IGNORECASE),
     "draft restriction": re.compile(r"\bdrafts?\b", re.IGNORECASE),
+    # a cancellation notice often just says "BNM 0015-26 IS CANCELLED" without
+    # restating "dredging"/"shoaling"/"draft" - catch those too so they aren't
+    # silently dropped by the categories != "" filter below
+    "cancellation": re.compile(r"\bcancel", re.IGNORECASE),
 }
 
 # mile markers show up in notice text as "MM 348.7 ARK", "NM 125.0", "MILE 44.4",
@@ -196,7 +200,7 @@ def main():
         else:
             combined = matched
         combined.to_csv(OUTPUT_FILE, index=False)
-        print(f"{len(matched)} of those matched dredging/shoaling/draft-restriction; {len(combined)} total rows now in {OUTPUT_FILE}")
+        print(f"{len(matched)} of those matched dredging/shoaling/draft-restriction/cancellation; {len(combined)} total rows now in {OUTPUT_FILE}")
     else:
         print("Nothing to process.")
 
