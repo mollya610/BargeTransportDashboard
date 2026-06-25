@@ -248,7 +248,27 @@ def _wrap_two_lines(text):
 # --------------------------------------------------
 
 app = dash.Dash(__name__)
-app.title = "Mississippi River Bathymetry & Dredging"
+app.title = "Grain Transportation Conditions"
+app.index_string = """
+<!DOCTYPE html>
+<html>
+    <head>
+        {%metas%}
+        <title>{%title%}</title>
+        {%favicon%}
+        <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&display=swap" rel="stylesheet">
+        {%css%}
+    </head>
+    <body>
+        {%app_entry%}
+        <footer>
+            {%config%}
+            {%scripts%}
+            {%renderer%}
+        </footer>
+    </body>
+</html>
+"""
 
 # --------------------------------------------------
 # LAYOUT
@@ -297,13 +317,17 @@ app.layout = html.Div(
             style={
                 "width": "100%",
                 "padding": "15px 0",
-                "background": "#1b3a5c",
+                "background": "#2166ac",
                 "text-align": "center",
             },
             children=[
                 html.H2(
-                    "Mississippi River Bathymetry & Dredging",
-                    style={"margin": 0, "color": "white"}
+                    "Grain Transportation Conditions",
+                    style={
+                        "margin": 0, "color": "white",
+                        "font-family": "'Bebas Neue', sans-serif",
+                        "font-size": "26px", "letter-spacing": "1.5px",
+                    }
                 )
             ]
         ),
@@ -677,8 +701,8 @@ def update_map(year, layers):
 
     # map layout
     fig.update_layout(
-        mapbox=dict(
-            style="basic",
+        map=dict(
+            style="carto-darkmatter",
             zoom=8.5,
             center=dict(lat=32.5, lon=-91.1),
         ),
