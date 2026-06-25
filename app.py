@@ -32,10 +32,19 @@ bathy["LAT"] = bathy["rep_point"].apply(lambda p: p.y)
 # get navigation notices (dredging/shoaling/draft restriction/other) from the manually
 # maintained notices_<year>.xlsx workbook(s) and locate them via mile markers or, for
 # dredging at a named location instead of a mile marker, a manually entered lat/lon
-CATEGORY_LABELS = {"dredging": "Dredging", "shoaling": "Shoaling", "draft": "Draft Restriction"}
-CATEGORY_COLORS = {"dredging": "#1b9e77", "shoaling": "#756bb1", "draft": "#8c510a"}
-DRAFT_UPCOMING_OPACITY = 0.25
-DRAFT_ACTIVE_OPACITY = 0.55
+CATEGORY_LABELS = {"dredging": "Dredging", "shoaling": "Shoaling", "draft": "Draft Restriction", "other": "Other"}
+CATEGORY_COLORS = {"dredging": "#1b9e77", "shoaling": "#756bb1", "draft": "#8c510a", "other": "#e6a817"}
+CATEGORY_ICONS = {"dredging": "🛠️", "shoaling": "🔺", "other": "⚠️"}
+DRAFT_ANNOUNCED_OPACITY = 0.45
+DRAFT_IN_PLACE_OPACITY = 0.85
+BIG, MED, SMALL = "18px", "14px", "11px"
+
+# bathymetry survey points are bucketed into 3 depth bins, each with its own color/size
+DEPTH_BINS = [
+    ("Above 20 ft", "#ffeb3b", 8),
+    ("14-20 ft", "#ff9800", 13),
+    ("Below 14 ft", "#e53935", 18),
+]
 
 # the workbook uses short river codes rather than the full names in the mile-marker table
 RIVER_CODE_MAP = {"LMR": "MISSISSIPPI-LO", "UMR": "MISSISSIPPI-UP", "ARK": "ARKANSAS"}
@@ -44,8 +53,8 @@ mile_lookup = (
     pd.read_csv("update_bathym/usace_river_mile_markers.csv")
     .groupby(["RIVER_NAME", "MILE"])[["LON", "LAT"]].mean()
 )
-# ordered points per river, used to draw draft-restriction notices as a shaded line along
-# every mile marker they cover instead of a single dot
+# ordered points per river, used to draw a smoothed range indicator between two mile
+# markers instead of a single dot
 river_mile_points = mile_lookup.reset_index().sort_values(["RIVER_NAME", "MILE"])
 
 notices = pd.concat(
@@ -55,10 +64,17 @@ notices = pd.concat(
 notices["date_published"] = pd.to_datetime(notices["date_published"])
 notices["date_start"] = pd.to_datetime(notices["date_start"])
 notices["date_end"] = pd.to_datetime(notices["date_end"])
+notices["cancelled_date"] = pd.to_datetime(notices["cancelled_date"])
+notices["replaced_date"] = pd.to_datetime(notices["replaced_date"])
 notices["year"] = notices["date_published"].dt.year
 notices["date_str"] = notices["date_published"].dt.strftime("%Y-%m-%d")
-notices["is_active_flag"] = notices["active"].fillna("N").str.upper().eq("Y")
+notices["date_str_long"] = notices["date_published"].dt.strftime("%B %d, %Y")
+notices["is_active_flag"] = notices["active?"].fillna("N").str.upper().eq("Y")
 notices["river_name"] = notices["river"].map(RIVER_CODE_MAP)
+
+
+def _fmt_date(d):
+    return d.strftime("%b %d, %Y") if pd.notna(d) else ""
 
 
 def _format_mm(row):
@@ -66,12 +82,25 @@ def _format_mm(row):
     if pd.isna(lo) and pd.isna(hi):
         return None
     if pd.isna(hi) or lo == hi:
-        return f"MM {lo:g}"
-    return f"MM {lo:g}–{hi:g}"
+        return f"Mile {lo:g}"
+    return f"Miles {lo:g}–{hi:g}"
+
+
+def _location_line(row):
+    mm = row["mm_label"]
+    detail = row.get("location_details")
+    if pd.notna(mm) and pd.notna(detail):
+        return f"Location: {mm}, {detail}"
+    if pd.notna(mm):
+        return f"Location: {mm}"
+    if pd.notna(detail):
+        return f"Location: {detail}"
+    return ""
 
 
 notices["mm_label"] = notices.apply(_format_mm, axis=1)
 notices["mid_mile"] = notices[["mm_low", "mm_high"]].mean(axis=1)
+notices["location_line"] = notices.apply(_location_line, axis=1)
 
 # fill in lat/lon from the mile-marker table for any row that didn't already get one
 # manually entered (the dredging rows located at a named spot like "McKellar Lake")
@@ -83,6 +112,14 @@ notices = notices.merge(mile_lookup_flat, on=["river_name", "mile_marker_round"]
 notices["lat"] = notices["lat"].fillna(notices["lat_lookup"])
 notices["lon"] = notices["lon"].fillna(notices["lon_lookup"])
 notices = notices.drop(columns=["lat_lookup", "lon_lookup"])
+
+
+def _smooth_path(lons, lats, window=5):
+    """Light moving-average smoothing so a mile-marker range reads as a clean curve
+    instead of the visibly jagged zigzag the raw ~1-mile-spaced survey points make."""
+    lon_s = pd.Series(lons).rolling(window, center=True, min_periods=1).mean()
+    lat_s = pd.Series(lats).rolling(window, center=True, min_periods=1).mean()
+    return lon_s.tolist(), lat_s.tolist()
 
 # get barge rate data  
 url = "https://www.ams.usda.gov/sites/default/files/media/GTRFigure10Table9.xlsx"
@@ -172,6 +209,39 @@ lats = []
 x, y = river_line.xy
 lons = list(x)
 lats = list(y)
+river_lons_arr = np.array(lons)
+river_lats_arr = np.array(lats)
+
+
+def _nearest_river_index(lon, lat):
+    d2 = (river_lons_arr - lon) ** 2 + (river_lats_arr - lat) ** 2
+    return int(np.argmin(d2))
+
+
+def _nearest_mile_lonlat(river_name, mile):
+    sub = river_mile_points[river_mile_points["RIVER_NAME"] == river_name]
+    if sub.empty:
+        return None
+    row = sub.loc[(sub["MILE"] - mile).abs().idxmin()]
+    return row["LON"], row["LAT"]
+
+
+def _wrap_two_lines(text):
+    text = str(text)
+    if len(text) <= 40:
+        return text
+    mid = len(text) // 2
+    left_space = text.rfind(" ", 0, mid)
+    right_space = text.find(" ", mid)
+    if left_space == -1 and right_space == -1:
+        split_at = mid
+    elif left_space == -1:
+        split_at = right_space
+    elif right_space == -1:
+        split_at = left_space
+    else:
+        split_at = left_space if (mid - left_space) <= (right_space - mid) else right_space
+    return text[:split_at] + "<br>" + text[split_at + 1:]
 
 # --------------------------------------------------
 # DASH APP
@@ -202,23 +272,20 @@ PLOTS_PANEL_OPEN = {
     "overflow-y": "auto",
 }
 
-# Style constants for the draft-restriction click detail box, floating over the map
-# (sits below the top-right warning icon so the two never overlap)
-DRAFT_DETAIL_HIDDEN = {"display": "none"}
-DRAFT_DETAIL_VISIBLE = {
-    "position": "absolute", "top": "65px", "right": "15px", "zIndex": "25",
-    "width": "320px", "background": "rgba(255,255,255,0.97)",
+# Style constants for the notice click-detail box, floating over the map. Shared by all
+# four notice categories - clicking any dredging/shoaling/draft/other marker opens it.
+NOTICE_DETAIL_HIDDEN = {"display": "none"}
+NOTICE_DETAIL_VISIBLE = {
+    "position": "absolute", "top": "15px", "right": "15px", "zIndex": "25",
+    "width": "330px", "background": "rgba(255,255,255,0.97)",
     "padding": "16px 18px", "border-radius": "8px",
     "box-shadow": "0 2px 10px rgba(0,0,0,0.4)",
-    "font-family": "Arial, sans-serif",
+    "font-family": "Arial, sans-serif", "max-height": "80vh", "overflow-y": "auto",
 }
-
-# Style constants for the "other" warning icon, top-right corner of the map
-WARNING_ICON_HIDDEN = {"display": "none"}
-WARNING_ICON_VISIBLE = {
-    "position": "absolute", "top": "15px", "right": "15px", "zIndex": "12",
-    "font-size": "30px", "cursor": "default",
-    "filter": "drop-shadow(0 1px 3px rgba(0,0,0,0.5))",
+MEMO_TEXT_HIDDEN = {"display": "none"}
+MEMO_TEXT_VISIBLE = {
+    "display": "block", "font-size": SMALL, "color": "#444", "margin-top": "6px",
+    "padding": "8px", "background": "#f4f4f4", "border-radius": "4px",
 }
 
 app.layout = html.Div(
@@ -242,7 +309,7 @@ app.layout = html.Div(
         ),
 
         dcc.Store(id="plots-panel-store", data=False),
-        dcc.Store(id="draft-detail-store", data=None),
+        dcc.Store(id="notice-detail-store", data=None),
 
         ##################################
         # Map fills the full width; controls and plots panel float on top of it
@@ -253,28 +320,21 @@ app.layout = html.Div(
                 # Map, edge to edge
                 dcc.Graph(id="map", style={"height": "100%", "width": "100%"}),
 
-                # Warning icon for active "other" notices (e.g. tropical storms), top-right
+                # Notice click-detail box, top-right - shared by all four notice categories
+                # (dredging/shoaling/draft/other); clicking any marker opens it
                 html.Div(
-                    "⚠️",
-                    id="other-warning-icon",
-                    title="",
-                    style=WARNING_ICON_HIDDEN
-                ),
-
-                # Draft-restriction click detail box, top-right (below the warning icon)
-                html.Div(
-                    id="draft-detail-box",
-                    style=DRAFT_DETAIL_HIDDEN,
+                    id="notice-detail-box",
+                    style=NOTICE_DETAIL_HIDDEN,
                     children=[
                         html.Button(
-                            "✕", id="draft-detail-close",
+                            "✕", id="notice-detail-close",
                             style={
                                 "position": "absolute", "top": "8px", "right": "10px",
                                 "border": "none", "background": "none", "cursor": "pointer",
                                 "font-size": "16px", "color": "#888",
                             }
                         ),
-                        html.Div(id="draft-detail-content")
+                        html.Div(id="notice-detail-content")
                     ]
                 ),
 
@@ -332,65 +392,7 @@ app.layout = html.Div(
                     ]
                 ),
 
-                # Colorbar overlay, grouped with the map's legend in the bottom-left corner
-                html.Div(
-                    style={
-                        "position": "absolute",
-                        "bottom": "50px",
-                        "left": "10px",
-                        "zIndex": "10",
-                        "width": "160px",
-                        "background": "rgba(255,255,255,0.8)",
-                        "padding": "4px 10px 6px 6px",
-                        "border-radius": "0",
-                        "box-shadow": "0 1px 4px rgba(0,0,0,0.3)"
-                    },
-                    children=[
-                        html.Div(
-                            "Depth (ft)",
-                            style={
-                                "font-family": "Arial, sans-serif",
-                                "font-size": "12px",
-                                "color": "#444",
-                                "margin-bottom": "2px"
-                            }
-                        ),
-                        dcc.Graph(
-                            id="colorbar",
-                            figure={
-                                "data": [
-                                    go.Scatter(
-                                        x=[None],
-                                        y=[None],
-                                        mode='markers',
-                                        marker=dict(
-                                            colorscale="YlOrRd",
-                                            cmin=0,
-                                            cmax=40,
-                                            colorbar=dict(
-                                                tickfont=dict(size=12, family="Arial, sans-serif"),
-                                                orientation="h",
-                                                thickness=8,
-                                                len=0.9,
-                                                y=1, yanchor="top",
-                                            ),
-                                            size=0
-                                        ),
-                                        showlegend=False
-                                    )
-                                ],
-                                "layout": go.Layout(
-                                    margin=dict(l=0, r=0, t=0, b=0),
-                                    height=35,
-                                    paper_bgcolor="rgba(0,0,0,0)",
-                                    plot_bgcolor="rgba(0,0,0,0)",
-                                )
-                            },
-                            config={"displayModeBar": False},
-                            style={"height": "35px"}
-                        )
-                    ]
-                ),
+
 
                 # Tab to open/close the plots panel, on the right edge of the map
                 html.Button(
@@ -497,79 +499,90 @@ def update_map(year, layers):
 
         shown_legend = {"active": False, "upcoming": False}
         for _, row in df_draft.iterrows():
-            seg = river_mile_points[
-                (river_mile_points["RIVER_NAME"] == row["river_name"]) &
-                (river_mile_points["MILE"] >= row["mm_low"]) &
-                (river_mile_points["MILE"] <= row["mm_high"])
-            ]
-            if seg.empty:
+            # follow the actual river curve rather than the sparse mile-marker points:
+            # find where the restriction's start/end mile markers fall on the dense
+            # river line geometry and slice that line between the two closest points
+            start_lonlat = _nearest_mile_lonlat(row["river_name"], row["mm_low"])
+            end_lonlat = _nearest_mile_lonlat(row["river_name"], row["mm_high"])
+            if start_lonlat is None or end_lonlat is None:
+                continue
+            i0 = _nearest_river_index(*start_lonlat)
+            i1 = _nearest_river_index(*end_lonlat)
+            lo_idx, hi_idx = min(i0, i1), max(i0, i1)
+            seg_lons = river_lons_arr[lo_idx:hi_idx + 1]
+            seg_lats = river_lats_arr[lo_idx:hi_idx + 1]
+            if len(seg_lons) < 2:
                 continue
 
             is_upcoming = row["is_upcoming"]
             status = "upcoming" if is_upcoming else "active"
             date_start_str = row["date_start"].strftime("%b %d, %Y") if pd.notna(row["date_start"]) else ""
-            date_end_str = row["date_end"].strftime("%b %d, %Y") if pd.notna(row["date_end"]) else ""
             header = (
                 f"Draft Restriction begins {date_start_str}" if is_upcoming
                 else "Active Draft Restriction"
             )
-            # repeated per point so a click on any part of the line carries the full detail
-            customdata = [[
-                "draft", status, date_start_str, date_end_str,
-                row["northbound"] if pd.notna(row["northbound"]) else "",
-                row["southbound"] if pd.notna(row["southbound"]) else "",
-                row["mm_label"] or "",
-            ]] * len(seg)
+            # repeated per point so a click on any part of the line carries the full memo
+            full_memo = row["full_memo"] if pd.notna(row["full_memo"]) else ""
+            customdata = [["draft", full_memo]] * len(seg_lons)
+            northbound = _wrap_two_lines(row["northbound"]) if pd.notna(row["northbound"]) else "—"
+            southbound = "<br>".join(textwrap.wrap(str(row["southbound"]), width=35)) if pd.notna(row["southbound"]) else "—"
+            hovertext = (
+                f"<b>{header}</b><br>"
+                f"{row['mm_label']}<br>"
+                f"Start: {date_start_str or '—'}<br>"
+                f"Southbound: {southbound}<br>"
+                f"Northbound: {northbound}<br>"
+                f"<i>Click for full USCG Memo</i>"
+            )
 
             fig.add_trace(
                 go.Scattermap(
-                    lon=seg["LON"],
-                    lat=seg["LAT"],
+                    lon=seg_lons,
+                    lat=seg_lats,
                     mode="lines",
-                    line=dict(color=CATEGORY_COLORS["draft"], width=10),
-                    opacity=DRAFT_UPCOMING_OPACITY if is_upcoming else DRAFT_ACTIVE_OPACITY,
+                    line=dict(color=CATEGORY_COLORS["draft"], width=6),
+                    opacity=DRAFT_ANNOUNCED_OPACITY if is_upcoming else DRAFT_IN_PLACE_OPACITY,
                     legendgroup=f"draft-{status}",
                     showlegend=not shown_legend[status],
                     name="Draft Restriction" + (" (upcoming)" if is_upcoming else ""),
                     hoverinfo="text",
-                    hovertext=f"<b>{header}</b><br>Mile Marker(s): {row['mm_label']}<br>Click for details",
+                    hovertext=hovertext,
                     customdata=customdata,
                 )
             )
             shown_legend[status] = True
 
-    #  bathym layer
+    #  bathym layer - 3 depth bins, each its own trace so size/color/legend are discrete.
+    # drawn here (before dredging/shoaling/other) so it sits behind them on the map, but
+    # legendrank pushes it below them in the legend regardless of draw order
     if "bathy" in layers:
-        conditions = [
-        df_b["depth"] > 30,(df_b["depth"] > 25) & (df_b["depth"] <= 30),
-        (df_b["depth"] > 20) & (df_b["depth"] <= 25),(df_b["depth"] > 15) & (df_b["depth"] <= 20),
-        df_b["depth"] <= 15]
-        sizes = [8, 10, 12, 15, 18]
-        df_b["marker_size"] = np.select(conditions, sizes)
-        fig.add_trace(
-            go.Scattermap(
-                lon=df_b["LON"],
-                lat=df_b["LAT"],
-                mode="markers",
-                marker=dict(
-                    size=df_b["marker_size"],
-                    color=df_b["depth"],
-                    colorscale="YlOrRd",
-                    reversescale=True,
-                    cmin=0,
-                    cmax=40,
-                    #colorbar=dict(title="Depth (ft)"),
-                    opacity=0.7,
-                ),
-                showlegend=False,
-                customdata=df_b[["date"]],
-                name="Bathymetry",
-                hovertemplate=(
-                    "Depth: %{marker.color:.1f} ft<br>"
-                    "Date: %{customdata[0]}<extra></extra>"
+        depth_masks = {
+            "Above 20 ft": df_b["depth"] > 20,
+            "14-20 ft": (df_b["depth"] >= 14) & (df_b["depth"] <= 20),
+            "Below 14 ft": df_b["depth"] < 14,
+        }
+        for label, color, size in DEPTH_BINS:
+            df_bin = df_b[depth_masks[label]]
+            if df_bin.empty:
+                continue
+            fig.add_trace(
+                go.Scattermap(
+                    lon=df_bin["LON"],
+                    lat=df_bin["LAT"],
+                    mode="markers",
+                    marker=dict(size=size, color=color, opacity=1.0),
+                    showlegend=True,
+                    legendgroup="depth_survey",
+                    legendgrouptitle_text="Survey Locations:<br>Depth Under Low Water",
+                    legendrank=10,
+                    customdata=df_bin[["date", "depth"]],
+                    name=label,
+                    hovertemplate=(
+                        "Depth: %{customdata[1]:.1f} ft<br>"
+                        "Date: %{customdata[0]}<extra></extra>"
+                    )
                 )
             )
-        )
 
     # dredging/shoaling markers - one trace per category so each can be toggled and colored
     # on its own (draft restriction is drawn separately above, behind the bathymetry layer).
@@ -584,16 +597,16 @@ def update_map(year, layers):
             continue
 
         hovertexts = []
+        customdatas = []
         for _, r in df_cat.iterrows():
+            instructions = str(r["instructions"]) if pd.notna(r.get("instructions")) else ""
+            loc_line = r["location_line"]
+            full_memo = r["full_memo"] if pd.notna(r.get("full_memo")) else ""
             if category == "shoaling":
-                lines = [f"<b><span style='font-size:16px'>Shoaling reported on {r['date_str']}</span></b>"]
-                lo, hi = r["mm_low"], r["mm_high"]
-                if pd.notna(lo) or pd.notna(hi):
-                    mile_txt = f"Mile {lo:g}" if (pd.isna(hi) or lo == hi) else f"Miles {lo:g}–{hi:g}"
-                    loc_detail = f", {r['location_details']}" if pd.notna(r.get("location_details")) else ""
-                    lines.append(f"Location: {mile_txt}{loc_detail}")
-                elif pd.notna(r.get("location_details")):
-                    lines.append(f"Location: {r['location_details']}")
+                date_range = r["date_str"]
+                lines = [f"<b><span style='font-size:16px'>Shoaling reported on {date_range}</span></b>"]
+                if loc_line:
+                    lines.append(loc_line)
             else:
                 date_start, date_end = r["date_start"], r["date_end"]
                 if pd.isna(date_start):
@@ -613,20 +626,13 @@ def update_map(year, layers):
                     f"<b><span style='font-size:16px'>Dredging {status_word}</span></b>",
                     f"<b><span style='font-size:16px'>{date_range}</span></b>",
                 ]
-                lo, hi = r["mm_low"], r["mm_high"]
-                mile_txt = None
-                if pd.notna(lo) or pd.notna(hi):
-                    mile_txt = f"Mile {lo:g}" if (pd.isna(hi) or lo == hi) else f"Miles {lo:g}–{hi:g}"
-                loc_detail = r.get("location_details")
-                if mile_txt and pd.notna(loc_detail):
-                    lines.append(f"Location: {mile_txt}, {loc_detail}")
-                elif mile_txt:
-                    lines.append(f"Location: {mile_txt}")
-                elif pd.notna(loc_detail):
-                    lines.append(f"Location: {loc_detail}")
-            if pd.notna(r.get("instructions")):
-                wrapped = "<br>".join(textwrap.wrap(str(r["instructions"]), width=55))
+                if loc_line:
+                    lines.append(loc_line)
+            customdatas.append([category, full_memo])
+            if instructions:
+                wrapped = "<br>".join(textwrap.wrap(instructions, width=55))
                 lines.append(f"<span style='font-size:11px'>{wrapped}</span>")
+            lines.append("<i>Click for full USCG Memo</i>")
             hovertexts.append("<br>".join(lines))
 
         fig.add_trace(
@@ -634,19 +640,42 @@ def update_map(year, layers):
                 lon=df_cat["lon"],
                 lat=df_cat["lat"],
                 mode="markers",
-                marker=dict(
-                    size=10,
-                    color=CATEGORY_COLORS[category],
-                    opacity=0.85,
-                ),
+                marker=dict(size=11, color=CATEGORY_COLORS[category], opacity=1.0),
                 showlegend=True,
+                legendrank=1 if category == "dredging" else 2,
                 name=CATEGORY_LABELS[category],
                 hoverinfo="text",
                 hovertext=hovertexts,
+                customdata=customdatas,
             )
         )
 
-    # map layout 
+    # "other" notices (e.g. tropical storms) - always shown regardless of layer toggle,
+    # same as the standalone warning icon they replace
+    df_other = df_n[(df_n["category"] == "other") & (df_n["is_active_flag"])].dropna(subset=["lat", "lon"])
+    if not df_other.empty:
+        hovertexts = [
+            f"<b><span style='font-size:16px'>{CATEGORY_ICONS['other']} Navigation Warning</span></b>"
+            f"<br>{r['other_notes']}<br><i>Click for details</i>"
+            for _, r in df_other.iterrows()
+        ]
+        customdatas = [["other", r["other_notes"], r["full_memo"]] for _, r in df_other.iterrows()]
+        fig.add_trace(
+            go.Scattermap(
+                lon=df_other["lon"],
+                lat=df_other["lat"],
+                mode="markers",
+                marker=dict(size=13, color=CATEGORY_COLORS["other"], opacity=0.85),
+                showlegend=True,
+                legendrank=3,
+                name=CATEGORY_LABELS["other"],
+                hoverinfo="text",
+                hovertext=hovertexts,
+                customdata=customdatas,
+            )
+        )
+
+    # map layout
     fig.update_layout(
         mapbox=dict(
             style="basic",
@@ -666,80 +695,56 @@ def update_map(year, layers):
 
 
 # --------------------------------------------------
-# DRAFT RESTRICTION CLICK DETAIL
+# NOTICE CLICK DETAIL (shared by dredging/shoaling/draft/other)
 # --------------------------------------------------
 
 @app.callback(
-    Output("draft-detail-store", "data"),
+    Output("notice-detail-store", "data"),
     Input("map", "clickData"),
-    Input("draft-detail-close", "n_clicks"),
+    Input("notice-detail-close", "n_clicks"),
     prevent_initial_call=True
 )
-def handle_draft_click(click_data, n_close):
-    if dash.ctx.triggered_id == "draft-detail-close":
+def handle_notice_click(click_data, n_close):
+    if dash.ctx.triggered_id == "notice-detail-close":
         return None
     if click_data and click_data.get("points"):
         customdata = click_data["points"][0].get("customdata")
-        if customdata and customdata[0] == "draft":
-            _, status, date_start_str, date_end_str, northbound, southbound, mm_label = customdata
-            return {
-                "status": status,
-                "date_start": date_start_str,
-                "date_end": date_end_str,
-                "northbound": northbound,
-                "southbound": southbound,
-                "mm_label": mm_label,
-            }
+        if customdata:
+            return {"category": customdata[0], "fields": list(customdata[1:])}
     return dash.no_update
 
 
 @app.callback(
-    Output("draft-detail-box", "style"),
-    Output("draft-detail-content", "children"),
-    Input("draft-detail-store", "data")
+    Output("notice-detail-box", "style"),
+    Output("notice-detail-content", "children"),
+    Input("notice-detail-store", "data")
 )
-def render_draft_detail(data):
+def render_notice_detail(data):
     if not data:
-        return DRAFT_DETAIL_HIDDEN, []
+        return NOTICE_DETAIL_HIDDEN, []
 
-    if data["status"] == "active":
-        header = "ACTIVE DRAFT RESTRICTION"
-        header_color = CATEGORY_COLORS["draft"]
-    else:
-        header = f"DRAFT RESTRICTION BEGINS ON {data['date_start'].upper()}"
-        header_color = "#b08968"
+    category = data["category"]
+    fields = data["fields"]
 
-    children = [
-        html.H3(header, style={"margin": "0 0 10px 0", "color": header_color, "font-size": "18px"}),
-        html.P(f"Mile Marker(s): {data['mm_label']}") if data["mm_label"] else None,
-        html.P([html.B("Start: "), data["date_start"] or "—"]),
-        html.P([html.B("End: "), data["date_end"] or "Until further notice"]),
-        html.Hr(),
-        html.P([html.B("Northbound: "), data["northbound"] or "—"]),
-        html.P([html.B("Southbound: "), data["southbound"] or "—"]),
-    ]
-    return DRAFT_DETAIL_VISIBLE, children
+    if category in ("draft", "dredging", "shoaling"):
+        (full_memo,) = fields
+        children = [
+            html.H3("USCG BROADCAST NOTICE TO MARINERS",
+                    style={"margin": "0 0 10px 0", "color": CATEGORY_COLORS[category], "font-size": "18px"}),
+            html.P(full_memo, style={"white-space": "pre-wrap"}),
+        ]
 
+    else:  # "other"
+        other_notes, full_memo = fields
+        children = [
+            html.H3(f"{CATEGORY_ICONS['other']} NAVIGATION WARNING",
+                    style={"margin": "0 0 10px 0", "color": CATEGORY_COLORS["other"], "font-size": "18px"}),
+            html.P(other_notes),
+            html.Hr() if pd.notna(full_memo) else None,
+            html.P(full_memo, style={"font-size": SMALL, "color": "#444"}) if pd.notna(full_memo) else None,
+        ]
 
-# --------------------------------------------------
-# "OTHER" WARNING ICON
-# --------------------------------------------------
-
-@app.callback(
-    Output("other-warning-icon", "style"),
-    Output("other-warning-icon", "title"),
-    Input("year-slider", "value")
-)
-def update_warning_icon(year):
-    df_other = notices[
-        (notices["category"] == "other")
-        & (notices["year"] == year)
-        & (notices["is_active_flag"])
-    ]
-    if df_other.empty:
-        return WARNING_ICON_HIDDEN, ""
-    tooltip = "\n\n".join(df_other["other_notes"].dropna().astype(str).tolist())
-    return WARNING_ICON_VISIBLE, tooltip
+    return NOTICE_DETAIL_VISIBLE, children
 
 
 # another callback for the barge rate plot
