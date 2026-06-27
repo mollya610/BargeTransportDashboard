@@ -8,3 +8,5 @@ requests
 openpyxl
 pyproj
 pdfplumber
+Pillow
+PyMuPDF
