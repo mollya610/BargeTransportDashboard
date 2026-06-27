@@ -4,16 +4,35 @@ import argparse
 from datetime import date, timedelta
 from pathlib import Path
 
+import numpy as np
 import requests
 import pandas as pd
 
 # --- CONFIG -----------------
+REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT_DIR = Path(__file__).resolve().parent
 DATA_DIR = SCRIPT_DIR / "data"
 DATA_DIR.mkdir(exist_ok=True)
 
 LAST_RUN_FILE = SCRIPT_DIR / "last_run_date.csv"
 OUTPUT_FILE = DATA_DIR / "relevant_notices.csv"
+PENDING_FILE = DATA_DIR / "pending_notices.xlsx"
+
+# columns of the manually-maintained notices_<year>.xlsx workbook that app.py reads for
+# the map - pending_notices.xlsx mirrors this schema plus a "confirmed" review column so
+# promote_notices.py can move reviewed rows over once Molly signs off
+PENDING_COLUMNS = [
+    "date_published", "cancelled_date", "replaced_date", "active?", "message_id",
+    "category", "other_notes", "dredge", "river", "mm_low", "mm_high", "lat", "lon",
+    "date_start", "date_end", "northbound", "southbound", "location_details",
+    "instructions", "full_memo", "confirmed",
+]
+
+# the categorize() regexes flag everything that mentions these words, but the xlsx
+# schema wants one bucket per notice - dredging/shoaling/draft take priority since
+# they're the most specific; anything else (cancellation-only matches, or no match at
+# all, e.g. tropical storm advisories) falls back to "other"
+CATEGORY_PRIORITY = [("dredging", "dredging"), ("shoaling", "shoaling"), ("draft restriction", "draft")]
 
 BASE_URL = "https://www.navcen.uscg.gov"
 SEARCH_PATH = "/broadcast-notice-to-mariners-search-results"
@@ -123,10 +142,11 @@ def extract_mile_markers(body):
 
 def resolve_river_mile(body, mile_markers):
     """Collapse the raw mile-marker matches for one notice into a single
-    (river_name, mile_min, mile_max) location, picking whichever river abbreviation
-    shows up on the most matches (multi-river notices are rare and usually noise)."""
+    (river_name, river_abbr, mile_min, mile_max) location, picking whichever river
+    abbreviation shows up on the most matches (multi-river notices are rare and usually
+    noise)."""
     if not mile_markers:
-        return None, None, None
+        return None, None, None, None
 
     default_abbr = "LMR"
     for pattern, abbr in DEFAULT_RIVER_FROM_BODY:
@@ -147,10 +167,82 @@ def resolve_river_mile(body, mile_markers):
         counts[abbr] = counts.get(abbr, 0) + 1
 
     if not bounds:
-        return None, None, None
+        return None, None, None, None
     abbr = max(counts, key=counts.get)
     mile_min, mile_max = bounds[abbr]
-    return RIVER_NAME_MAP.get(abbr, "MISSISSIPPI-LO"), mile_min, mile_max
+    return RIVER_NAME_MAP.get(abbr, "MISSISSIPPI-LO"), abbr, mile_min, mile_max
+
+
+def extract_category(categories):
+    """Collapse the (possibly multi-valued) categories field into the single
+    dredging/shoaling/draft/other bucket the notices_<year>.xlsx schema expects."""
+    cats = str(categories)
+    for needle, label in CATEGORY_PRIORITY:
+        if needle in cats:
+            return label
+    return "other"
+
+
+def build_pending_rows(matched):
+    """Best-effort draft rows in the notices_<year>.xlsx schema for every newly-fetched
+    notice, regardless of category. Only the fields fetch_notices.py can extract
+    reliably (dates/IDs/category/river/mile markers/raw text) are filled in - the rest
+    (dredge vessel name, date_start/date_end, northbound/southbound text, lat/lon for
+    named-location dredging, cancellation/replacement links, active?) need a human to
+    read the notice and fill in, which is the whole point of the pending-review step."""
+    rows = pd.DataFrame({"confirmed": np.nan}, index=matched.index)
+    rows["date_published"] = pd.to_datetime(matched["date_time_published_gmt"])
+    rows["cancelled_date"] = pd.NaT
+    rows["replaced_date"] = pd.NaT
+    rows["active?"] = np.nan
+    rows["message_id"] = matched["message_id"]
+    rows["category"] = matched["categories"].apply(extract_category)
+    rows["other_notes"] = np.nan
+    rows["dredge"] = np.nan
+    rows["river"] = matched["river_abbr"]
+    rows["mm_low"] = matched["mile_marker_min"]
+    rows["mm_high"] = matched["mile_marker_max"]
+    rows["lat"] = np.nan
+    rows["lon"] = np.nan
+    rows["date_start"] = pd.NaT
+    rows["date_end"] = pd.NaT
+    rows["northbound"] = np.nan
+    rows["southbound"] = np.nan
+    rows["location_details"] = matched["geographic_area"]
+    rows["instructions"] = np.nan
+    rows["full_memo"] = matched["notes"]
+    return rows[PENDING_COLUMNS]
+
+
+def print_notification_summary(matched, pending_new):
+    """Console 'notification' of every new notice found this run, Lower Mississippi
+    sector notices called out separately since those are the ones Molly most wants to
+    see, with everything else (mostly District 8 Gulf-wide advisories) listed after."""
+    if matched.empty:
+        return
+    # pending_new shares matched's index (build_pending_rows builds it row-for-row from
+    # matched) - join on that, not message_id, since NAVCEN sometimes reuses the same
+    # message_id for a notice's later cancellation
+    category_by_idx = pending_new["category"]
+
+    def _print_rows(df):
+        for idx, row in df.iterrows():
+            snippet = str(row["notes"]).strip().replace("\n", " ")[:150]
+            print(f"  [{row['message_id']}] {row['date_time_published_gmt']} "
+                  f"({category_by_idx.loc[idx]}) - {row['geographic_area']}")
+            print(f"      {snippet}...")
+
+    lmr = matched[matched["originator"] == "Lower Mississippi"]
+    other = matched[matched["originator"] != "Lower Mississippi"]
+
+    print(f"\n=== {len(lmr)} new Lower Mississippi notice(s) ===")
+    _print_rows(lmr)
+    if not other.empty:
+        print(f"\n=== {len(other)} other new notice(s) (District 8 / Gulf-wide, etc.) ===")
+        _print_rows(other)
+    print(f"\n{len(pending_new)} draft row(s) added to {PENDING_FILE} for review.")
+    print("Open it, fill in/fix any fields, set 'confirmed' to Y (add to map) or N (discard) per row, "
+          "then run promote_notices.py.\n")
 
 
 def main():
@@ -177,9 +269,12 @@ def main():
         notices = get_notices(guids)
         notices["categories"] = notices["Message_Body"].apply(categorize)
         notices["mile_markers"] = notices["Message_Body"].apply(extract_mile_markers)
-        matched = notices[notices["categories"] != ""].copy()
+        # every notice in range gets logged - not just ones the dredging/shoaling/draft
+        # regexes catch - so nothing gets silently dropped before Molly gets a chance to
+        # review it
+        matched = notices.copy()
         located = matched.apply(lambda row: resolve_river_mile(row["Message_Body"], row["mile_markers"]), axis=1)
-        matched[["river_name", "mile_marker_min", "mile_marker_max"]] = pd.DataFrame(located.tolist(), index=matched.index)
+        matched[["river_name", "river_abbr", "mile_marker_min", "mile_marker_max"]] = pd.DataFrame(located.tolist(), index=matched.index)
         matched = matched.rename(columns={
             "Date_Time_Published_GMT": "date_time_published_gmt",
             "Message_ID": "message_id",
@@ -189,7 +284,7 @@ def main():
             "Message_Body": "notes",
         })
         out_cols = ["date_time_published_gmt", "message_id", "categories", "mile_markers",
-                    "river_name", "mile_marker_min", "mile_marker_max",
+                    "river_name", "river_abbr", "mile_marker_min", "mile_marker_max",
                     "geographic_area", "originator", "criticality", "notes"]
         matched = matched[out_cols]
 
@@ -200,7 +295,20 @@ def main():
         else:
             combined = matched
         combined.to_csv(OUTPUT_FILE, index=False)
-        print(f"{len(matched)} of those matched dredging/shoaling/draft-restriction/cancellation; {len(combined)} total rows now in {OUTPUT_FILE}")
+        print(f"{len(matched)} new notices found; {len(combined)} total rows now in {OUTPUT_FILE}")
+
+        pending_new = build_pending_rows(matched)
+        if PENDING_FILE.exists():
+            existing_pending = pd.read_excel(PENDING_FILE)
+            pending_combined = pd.concat([existing_pending, pending_new], ignore_index=True)
+            # message_id alone isn't a safe dedup key - NAVCEN sometimes reuses a
+            # notice's message_id for its own later cancellation - so key on the pair
+            pending_combined = pending_combined.drop_duplicates(subset=["message_id", "date_published"], keep="first")
+        else:
+            pending_combined = pending_new
+        pending_combined.to_excel(PENDING_FILE, index=False)
+
+        print_notification_summary(matched, pending_new)
     else:
         print("Nothing to process.")
 

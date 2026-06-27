@@ -11,6 +11,51 @@ import numpy as np
 import requests
 import pandas as pd
 from shapely import wkt
+from PIL import Image, ImageDraw
+
+
+def _build_dredge_marker():
+    import fitz
+    import numpy as np
+    os.makedirs("assets", exist_ok=True)
+    doc = fitz.open("dredgicon.pdf")
+    pix = doc[0].get_pixmap(matrix=fitz.Matrix(4, 4), alpha=True)
+    src = Image.frombytes("RGBA", (pix.width, pix.height), pix.samples)
+    arr = np.array(src)
+    # find and crop to non-white content
+    non_white = np.any(arr[:, :, :3] < 240, axis=2)
+    rows = np.where(non_white.any(axis=1))[0]
+    cols = np.where(non_white.any(axis=0))[0]
+    src = src.crop((cols[0], rows[0], cols[-1] + 1, rows[-1] + 1))
+    arr = np.array(src)
+    # make near-white pixels transparent
+    arr[np.all(arr[:, :, :3] > 240, axis=2), 3] = 0
+    Image.fromarray(arr).resize((64, 64), Image.LANCZOS).save("assets/dredge_marker.png")
+
+
+def _build_shoaling_marker():
+    import fitz
+    import numpy as np
+    os.makedirs("assets", exist_ok=True)
+    doc = fitz.open("Yield.pdf")
+    pix = doc[0].get_pixmap(matrix=fitz.Matrix(4, 4), alpha=True)
+    src = Image.frombytes("RGBA", (pix.width, pix.height), pix.samples)
+    arr = np.array(src)
+    non_white = np.any(arr[:, :, :3] < 240, axis=2)
+    rows = np.where(non_white.any(axis=1))[0]
+    cols = np.where(non_white.any(axis=0))[0]
+    src = src.crop((cols[0], rows[0], cols[-1] + 1, rows[-1] + 1))
+    arr = np.array(src)
+    arr[np.all(arr[:, :, :3] > 240, axis=2), 3] = 0
+    Image.fromarray(arr).resize((64, 64), Image.LANCZOS).save("assets/shoaling_marker.png")
+
+
+if not os.path.exists("assets/dredge_marker.png"):
+    _build_dredge_marker()
+
+if not os.path.exists("assets/shoaling_marker.png"):
+    _build_shoaling_marker()
+
 
 # LOAD DATA
 bathy = pd.read_csv("bathym_fixed.csv")
@@ -33,7 +78,7 @@ bathy["LAT"] = bathy["rep_point"].apply(lambda p: p.y)
 # maintained notices_<year>.xlsx workbook(s) and locate them via mile markers or, for
 # dredging at a named location instead of a mile marker, a manually entered lat/lon
 CATEGORY_LABELS = {"dredging": "Dredging", "shoaling": "Shoaling", "draft": "Draft Restriction", "other": "Other"}
-CATEGORY_COLORS = {"dredging": "#1b9e77", "shoaling": "#756bb1", "draft": "#8c510a", "other": "#e6a817"}
+CATEGORY_COLORS = {"dredging": "#4a3000", "shoaling": "#fdd734", "draft": "#8c510a", "other": "#e6a817"}
 CATEGORY_ICONS = {"dredging": "🛠️", "shoaling": "🔺", "other": "⚠️"}
 DRAFT_ANNOUNCED_OPACITY = 0.45
 DRAFT_IN_PLACE_OPACITY = 0.85
@@ -41,7 +86,7 @@ BIG, MED, SMALL = "18px", "14px", "11px"
 
 # bathymetry survey points are bucketed into 3 depth bins, each with its own color/size
 DEPTH_BINS = [
-    ("Above 20 ft", "#ffeb3b", 8),
+    ("Above 20 ft", "#2e7d32", 8),
     ("14-20 ft", "#ff9800", 13),
     ("Below 14 ft", "#e53935", 18),
 ]
@@ -211,6 +256,63 @@ lons = list(x)
 lats = list(y)
 river_lons_arr = np.array(lons)
 river_lats_arr = np.array(lats)
+
+# pre-compute hover text for every river line vertex
+_mm = river_mile_points[river_mile_points["RIVER_NAME"].isin(["MISSISSIPPI-LO", "MISSISSIPPI-UP"])].copy()
+_mm_display = {"MISSISSIPPI-LO": "Lower Mississippi River", "MISSISSIPPI-UP": "Upper Mississippi River"}
+_mm_coords = _mm[["LAT", "LON"]].values
+_rv_coords = np.column_stack([river_lats_arr, river_lons_arr])
+_diffs = _rv_coords[:, None, :] - _mm_coords[None, :, :]
+_idx = (_diffs ** 2).sum(axis=2).argmin(axis=1)
+_matched = _mm.iloc[_idx].reset_index(drop=True)
+river_hover = [
+    f"<b>{_mm_display[row['RIVER_NAME']]}</b><br>Mile Marker {int(row['MILE'])}"
+    for _, row in _matched.iterrows()
+]
+
+
+def _build_river(shapefile_name, mm_name, display_name):
+    """Return (lons, lats, hover_texts) for a navigable river, clipped to its mile-marker extent."""
+    mm_sub = river_mile_points[river_mile_points["RIVER_NAME"] == mm_name]
+    if mm_sub.empty:
+        return [], [], []
+    buf = 0.5
+    clipped = rivers[rivers["PNAME"] == shapefile_name].cx[
+        mm_sub["LON"].min() - buf: mm_sub["LON"].max() + buf,
+        mm_sub["LAT"].min() - buf: mm_sub["LAT"].max() + buf,
+    ]
+    if clipped.empty:
+        return [], [], []
+    geom = linemerge(clipped.union_all())
+    lines = list(geom.geoms) if geom.geom_type == "MultiLineString" else [geom]
+    r_lons, r_lats = [], []
+    for line in lines:
+        x, y = line.xy
+        r_lons.extend(list(x) + [None])
+        r_lats.extend(list(y) + [None])
+    # nearest mile-marker hover per vertex (skip None separators)
+    mm_coords = mm_sub[["LAT", "LON"]].values
+    hover = []
+    for lo, la in zip(r_lons, r_lats):
+        if lo is None:
+            hover.append("")
+            continue
+        diffs = np.array([[la, lo]]) - mm_coords
+        nearest = mm_sub.iloc[(diffs ** 2).sum(axis=1).argmin()]
+        hover.append(f"<b>{display_name}</b><br>Mile Marker {int(nearest['MILE'])}")
+    return r_lons, r_lats, hover
+
+
+EXTRA_RIVERS = [
+    ("OHIO R",     "OHIO",     "Ohio River",     "#2166ac"),
+    ("MISSOURI R", "MISSOURI", "Missouri River", "#2166ac"),
+    ("ILLINOIS R", "ILLINOIS", "Illinois River", "#2166ac"),
+    ("ARKANSAS R", "ARKANSAS", "Arkansas River", "#2166ac"),
+]
+extra_river_data = [
+    (display, color, *_build_river(sf, mm, display))
+    for sf, mm, display, color in EXTRA_RIVERS
+]
 
 
 def _nearest_river_index(lon, lat):
@@ -393,23 +495,71 @@ app.layout = html.Div(
                             ]
                         ),
 
-                        # Layers dropdown (multi-select)
+                        # Layers checkboxes
                         html.Div(
-                            style={"width": "220px"},
+                            style={"width": "240px"},
                             children=[
-                                html.Label("Layers"),
-                                dcc.Dropdown(
+                                html.Label("Layers", style={"font-weight": "bold", "margin-bottom": "6px", "display": "block"}),
+                                dcc.Checklist(
                                     id="layer-toggle",
                                     options=[
-                                        {"label": "Bathymetry", "value": "bathy"},
-                                        {"label": "Dredging", "value": "dredging"},
-                                        {"label": "Shoaling", "value": "shoaling"},
-                                        {"label": "Draft Restriction", "value": "draft"},
+                                        {
+                                            "label": html.Span([
+                                                html.Div([
+                                                    html.Span("Riverbed Surveys: Navigation Risk under Low Water"),
+                                                    html.Div(
+                                                        style={"display": "flex", "gap": "10px", "margin-top": "5px", "margin-left": "4px"},
+                                                        children=[
+                                                            html.Div([
+                                                                html.Div(style={"width": "12px", "height": "12px", "border-radius": "50%", "background": DEPTH_BINS[0][1], "display": "inline-block", "margin-right": "4px", "vertical-align": "middle"}),
+                                                                html.Span("Low", style={"font-size": "12px", "vertical-align": "middle"}),
+                                                            ]),
+                                                            html.Div([
+                                                                html.Div(style={"width": "12px", "height": "12px", "border-radius": "50%", "background": DEPTH_BINS[1][1], "display": "inline-block", "margin-right": "4px", "vertical-align": "middle"}),
+                                                                html.Span("Medium", style={"font-size": "12px", "vertical-align": "middle"}),
+                                                            ]),
+                                                            html.Div([
+                                                                html.Div(style={"width": "12px", "height": "12px", "border-radius": "50%", "background": DEPTH_BINS[2][1], "display": "inline-block", "margin-right": "4px", "vertical-align": "middle"}),
+                                                                html.Span("High", style={"font-size": "12px", "vertical-align": "middle"}),
+                                                            ]),
+                                                        ]
+                                                    ),
+                                                ])
+                                            ]),
+                                            "value": "bathy",
+                                        },
+                                        {
+                                            "label": html.Span([
+                                                html.Img(src="/assets/dredge_marker.png", height="22", style={"vertical-align": "middle", "margin-right": "5px"}),
+                                                "Dredging",
+                                            ]),
+                                            "value": "dredging",
+                                        },
+                                        {
+                                            "label": html.Span([
+                                                html.Img(src="/assets/shoaling_marker.png", height="22", style={"vertical-align": "middle", "margin-right": "5px"}),
+                                                "Shoaling",
+                                            ]),
+                                            "value": "shoaling",
+                                        },
+                                        {
+                                            "label": html.Span([
+                                                html.Div(style={
+                                                    "display": "inline-block",
+                                                    "width": "22px", "height": "4px",
+                                                    "background": CATEGORY_COLORS["draft"],
+                                                    "vertical-align": "middle",
+                                                    "margin-right": "5px",
+                                                    "border-radius": "2px",
+                                                }),
+                                                "Draft Restriction",
+                                            ]),
+                                            "value": "draft",
+                                        },
                                     ],
                                     value=["bathy", "dredging", "shoaling", "draft"],
-                                    multi=True,
-                                    clearable=False,
-                                    style={"font-size": "14px"}
+                                    inputStyle={"margin-right": "6px"},
+                                    labelStyle={"display": "flex", "align-items": "center", "margin-bottom": "5px", "font-size": "14px"},
                                 )
                             ]
                         )
@@ -498,15 +648,25 @@ def update_map(year, layers):
         lon=lons,
         lat=lats,
         mode="lines",
-        line=dict(
-            color="#2166ac",
-            width=2
-        ),
+        line=dict(color="#2166ac", width=2),
         name="Mississippi River",
-        hoverinfo="skip",
-        showlegend=False
+        hoverinfo="text",
+        hovertext=river_hover,
+        showlegend=False,
     )
 )
+    for display, color, r_lons, r_lats, r_hover in extra_river_data:
+        if r_lons:
+            fig.add_trace(go.Scattermap(
+                lon=r_lons,
+                lat=r_lats,
+                mode="lines",
+                line=dict(color=color, width=2),
+                name=display,
+                hoverinfo="text",
+                hovertext=r_hover,
+                showlegend=False,
+            ))
 
     # draft restriction lines drawn first so they sit behind bathymetry and the other notice layers.
     # a restriction shows if it's currently active (active == "Y"), or if it hasn't started yet
@@ -586,9 +746,10 @@ def update_map(year, layers):
             "Below 14 ft": df_b["depth"] < 14,
         }
         for label, color, size in DEPTH_BINS:
-            df_bin = df_b[depth_masks[label]]
+            df_bin = df_b[depth_masks[label]].copy()
             if df_bin.empty:
                 continue
+            df_bin["date_fmt"] = pd.to_datetime(df_bin["date"]).dt.strftime("%B %-d, %Y")
             fig.add_trace(
                 go.Scattermap(
                     lon=df_bin["LON"],
@@ -599,11 +760,12 @@ def update_map(year, layers):
                     legendgroup="depth_survey",
                     legendgrouptitle_text="Survey Locations:<br>Depth Under Low Water",
                     legendrank=10,
-                    customdata=df_bin[["date", "depth"]],
+                    customdata=df_bin[["date_fmt", "depth"]],
                     name=label,
                     hovertemplate=(
-                        "Depth: %{customdata[1]:.1f} ft<br>"
-                        "Date: %{customdata[0]}<extra></extra>"
+                        "<b><span style='font-size:16px'>Riverbed Survey</span></b><br>"
+                        "<span style='font-size:14px'>%{customdata[0]}</span><br>"
+                        "<span style='font-size:15px'>Estimated Depth under Low Water: <b>%{customdata[1]:.1f} ft</b></span><extra></extra>"
                     )
                 )
             )
@@ -612,6 +774,7 @@ def update_map(year, layers):
     # on its own (draft restriction is drawn separately above, behind the bathymetry layer).
     # both stay on the map for the year they were reported, regardless of active status -
     # dredging's hover just relabels itself planned/in progress/completed based on its dates.
+    icon_layers = []
     for category in ("dredging", "shoaling"):
         if category not in layers:
             continue
@@ -659,20 +822,63 @@ def update_map(year, layers):
             lines.append("<i>Click for full USCG Memo</i>")
             hovertexts.append("<br>".join(lines))
 
-        fig.add_trace(
-            go.Scattermap(
-                lon=df_cat["lon"],
-                lat=df_cat["lat"],
-                mode="markers",
-                marker=dict(size=11, color=CATEGORY_COLORS[category], opacity=1.0),
-                showlegend=True,
-                legendrank=1 if category == "dredging" else 2,
-                name=CATEGORY_LABELS[category],
-                hoverinfo="text",
-                hovertext=hovertexts,
-                customdata=customdatas,
+        if category == "dredging":
+            # Invisible trace — hover/click detection only; the custom icon layer handles display
+            fig.add_trace(
+                go.Scattermap(
+                    lon=df_cat["lon"],
+                    lat=df_cat["lat"],
+                    mode="markers",
+                    marker=dict(size=20, color=CATEGORY_COLORS[category], opacity=0),
+                    showlegend=True,
+                    legendrank=1,
+                    name=CATEGORY_LABELS[category],
+                    hoverinfo="text",
+                    hovertext=hovertexts,
+                    customdata=customdatas,
+                )
             )
-        )
+            icon_layers.append({
+                "sourcetype": "geojson",
+                "source": {
+                    "type": "FeatureCollection",
+                    "features": [
+                        {"type": "Feature",
+                         "geometry": {"type": "Point", "coordinates": [row["lon"], row["lat"]]}}
+                        for _, row in df_cat.iterrows()
+                    ],
+                },
+                "type": "symbol",
+                "symbol": {"icon": "dredge-icon", "iconsize": 4},
+            })
+        else:
+            fig.add_trace(
+                go.Scattermap(
+                    lon=df_cat["lon"],
+                    lat=df_cat["lat"],
+                    mode="markers",
+                    marker=dict(size=20, color=CATEGORY_COLORS[category], opacity=0),
+                    showlegend=True,
+                    legendrank=2,
+                    name=CATEGORY_LABELS[category],
+                    hoverinfo="text",
+                    hovertext=hovertexts,
+                    customdata=customdatas,
+                )
+            )
+            icon_layers.append({
+                "sourcetype": "geojson",
+                "source": {
+                    "type": "FeatureCollection",
+                    "features": [
+                        {"type": "Feature",
+                         "geometry": {"type": "Point", "coordinates": [row["lon"], row["lat"]]}}
+                        for _, row in df_cat.iterrows()
+                    ],
+                },
+                "type": "symbol",
+                "symbol": {"icon": "shoaling-icon", "iconsize": 3},
+            })
 
     # "other" notices (e.g. tropical storms) - always shown regardless of layer toggle,
     # same as the standalone warning icon they replace
@@ -705,14 +911,11 @@ def update_map(year, layers):
             style="carto-darkmatter",
             zoom=8.5,
             center=dict(lat=32.5, lon=-91.1),
+            layers=icon_layers,
         ),
         margin=dict(l=0, r=0, t=0, b=0),
         uirevision="keep-map",
-        legend=dict(
-            bgcolor="rgba(255,255,255,0.8)",
-            x=0.005, xanchor="left",
-            y=0.19, yanchor="bottom"
-        )
+        showlegend=False
     )
     
     return fig
@@ -731,9 +934,10 @@ def update_map(year, layers):
 def handle_notice_click(click_data, n_close):
     if dash.ctx.triggered_id == "notice-detail-close":
         return None
+    NOTICE_CATEGORIES = {"draft", "dredging", "shoaling", "other"}
     if click_data and click_data.get("points"):
         customdata = click_data["points"][0].get("customdata")
-        if customdata:
+        if customdata and customdata[0] in NOTICE_CATEGORIES:
             return {"category": customdata[0], "fields": list(customdata[1:])}
     return dash.no_update
 

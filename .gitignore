@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+*.bak
+
+# runtime-downloaded files
+freight_rates_southbound.xlsx
+price_spreads_futures_usda.xlsx
+
+# large pipeline output folders
+update_bathym/data/SurveyPointLayers/
+update_bathym/data/NAVD88Files/
+update_bathym/data/ActualDepthFiles/
+update_bathym/data/OtherDatumFiles/
