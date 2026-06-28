@@ -244,34 +244,16 @@ soy_price['plusone'] = soy_price['avg_price'] + soy_price['std_price']
 soy_price['minusone'] = soy_price['avg_price'] - soy_price['std_price']
 
 
-# now get river line 
-rivers = gpd.read_file('rivers_shapefile/rivers.shp')
-rivers = rivers.set_crs('EPSG:4326')
-mississippi = rivers[rivers['PNAME'] == 'MISSISSIPPI R']
-river_line = mississippi.union_all()
-river_line = linemerge(river_line)
-lons = []
-lats = []
+# now get river line — filter to Mississippi at read time so the full shapefile is never loaded
+mississippi = gpd.read_file('rivers_shapefile/rivers.shp', where="PNAME = 'MISSISSIPPI R'")
+mississippi = mississippi.set_crs('EPSG:4326')
+mississippi["geometry"] = mississippi.simplify(0.001)
+river_line = linemerge(mississippi.union_all())
 x, y = river_line.xy
-lons = list(x)
-lats = list(y)
-river_lons_arr = np.array(lons)
-river_lats_arr = np.array(lats)
-del rivers, mississippi, river_line, lons, lats, x, y
+river_lons_arr = np.array(list(x))
+river_lats_arr = np.array(list(y))
+del mississippi, river_line, x, y
 
-# pre-compute hover text for every river line vertex
-_mm = river_mile_points[river_mile_points["RIVER_NAME"].isin(["MISSISSIPPI-LO", "MISSISSIPPI-UP"])].copy()
-_mm_display = {"MISSISSIPPI-LO": "Lower Mississippi River", "MISSISSIPPI-UP": "Upper Mississippi River"}
-_mm_coords = _mm[["LAT", "LON"]].values
-_rv_coords = np.column_stack([river_lats_arr, river_lons_arr])
-_diffs = _rv_coords[:, None, :] - _mm_coords[None, :, :]
-_idx = (_diffs ** 2).sum(axis=2).argmin(axis=1)
-_matched = _mm.iloc[_idx].reset_index(drop=True)
-river_hover = [
-    f"<b>{_mm_display[row['RIVER_NAME']]}</b><br>Mile Marker {int(row['MILE'])}"
-    for _, row in _matched.iterrows()
-]
-del _mm, _mm_display, _mm_coords, _rv_coords, _diffs, _idx, _matched
 
 
 # EXTRA_RIVERS = [
@@ -622,8 +604,7 @@ def update_map(year, layers):
         mode="lines",
         line=dict(color="#2166ac", width=2),
         name="Mississippi River",
-        hoverinfo="text",
-        hovertext=river_hover,
+        hoverinfo="none",
         showlegend=False,
     )
 )
