@@ -13,7 +13,7 @@ NAVD88_DIR = DATA_DIR / "NAVD88Files"  # output of process_surveys.py
 
 CORRIDOR_FILE = SCRIPT_DIR / "ais_grid_counts_clean5.csv"
 DATUMS_FILE = SCRIPT_DIR / "datum_info.csv"
-CLEAN_BATHYMETRY_FILE = REPO_ROOT / "clean_bathymetry.csv"  # what app.py maps
+CLEAN_BATHYMETRY_FILE = REPO_ROOT / "bathym_fixed.csv"  # what app.py maps
 
 UTM_CRS = "EPSG:26915"
 GRID_CELL_M = 75  # ais_grid_counts_clean5.csv cell spacing, inferred from the x/y values
@@ -33,9 +33,11 @@ datums = gpd.GeoDataFrame(
 )
 datums_utm = datums.to_crs(UTM_CRS)
 
-# ---------------- SKIP SURVEYS ALREADY IN clean_bathymetry.csv ----------------
+# ---------------- SKIP SURVEYS ALREADY IN bathym_fixed.csv ----------------
 if CLEAN_BATHYMETRY_FILE.exists():
-    existing = pd.read_csv(CLEAN_BATHYMETRY_FILE, index_col=0)
+    existing = pd.read_csv(CLEAN_BATHYMETRY_FILE)
+    if "Unnamed: 0" in existing.columns:
+        existing = existing.drop(columns=["Unnamed: 0"])
     done_files = set(existing["file"])
 else:
     existing = pd.DataFrame()
@@ -87,6 +89,7 @@ for fpath in new_files:
         "water_elev": water_elev,
         "weights_sum": weights.sum(),
         "geometry": poly_tosave.wkt,
+        "confirmed": "no",
     })
 
 if not rows:
@@ -98,5 +101,5 @@ else:
     new_df = new_df.dropna(subset=["bathym_mean"])
 
     combined = pd.concat([existing, new_df], ignore_index=True)
-    combined.to_csv(CLEAN_BATHYMETRY_FILE)
+    combined.to_csv(CLEAN_BATHYMETRY_FILE, index=False)
     print(f"Added {len(new_df)} survey(s) to {CLEAN_BATHYMETRY_FILE} ({skipped} skipped, no AIS coverage)")

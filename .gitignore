@@ -11,3 +11,4 @@ update_bathym/data/SurveyPointLayers/
 update_bathym/data/NAVD88Files/
 update_bathym/data/ActualDepthFiles/
 update_bathym/data/OtherDatumFiles/
+update_bathym/data/raw_xyz/

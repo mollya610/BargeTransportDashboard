@@ -61,6 +61,8 @@ if not os.path.exists("assets/shoaling_marker.png"):
 
 # LOAD DATA
 bathy = pd.read_csv("bathym_fixed.csv")
+if "confirmed" in bathy.columns:
+    bathy = bathy[bathy["confirmed"].fillna("yes").str.lower() == "yes"]
 
 # Ensure year is int
 bathy["year"] = bathy["year"].astype(int)

@@ -1,0 +1,88 @@
+name: Daily data pipeline
+
+on:
+  schedule:
+    - cron: '0 12 * * *'   # noon UTC (7 AM Central) every day
+  workflow_dispatch:         # also runnable manually from the Actions tab
+
+permissions:
+  contents: write
+  issues: write
+
+jobs:
+  run-pipeline:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      # ── Bathymetry survey pipeline ────────────────────────────────────────────
+      - name: Check for new survey IDs
+        run: python update_bathym/check_for_surveys.py
+
+      - name: Download new surveys
+        run: python update_bathym/read_in_surveys.py
+
+      - name: Convert datums
+        run: python update_bathym/process_surveys.py
+
+      - name: Compute bathymetry stats
+        run: python update_bathym/compute_bathym_stats.py
+
+      - name: Generate depth polygons
+        run: python update_bathym/make_depth_polygons.py
+
+      # ── Notice pipeline ───────────────────────────────────────────────────────
+      - name: Fetch new USCG notices
+        run: python notice_to_mariners/fetch_notices.py
+
+      # ── Detect whether anything actually changed ──────────────────────────────
+      - name: Stage pipeline outputs
+        id: stage
+        run: |
+          git add \
+            bathym_fixed.csv \
+            update_bathym/data/DepthPolygons/ \
+            update_bathym/lm_ids_done.csv \
+            update_bathym/um_ids_done.csv \
+            notice_to_mariners/data/pending_notices.xlsx \
+            notice_to_mariners/last_run_date.csv 2>/dev/null || true
+          if git diff --cached --quiet; then
+            echo "new_data=false" >> "$GITHUB_OUTPUT"
+            echo "Nothing changed — no commit needed."
+          else
+            echo "new_data=true" >> "$GITHUB_OUTPUT"
+            git diff --cached --stat
+          fi
+
+      # ── Commit and push only when there is new data ───────────────────────────
+      - name: Commit and push
+        if: steps.stage.outputs.new_data == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git commit -m "Daily pipeline $(date -u +%Y-%m-%d): new data pending review"
+          git push
+
+      # ── Open a GitHub Issue so Molly gets an email notification ──────────────
+      - name: Open review issue
+        if: steps.stage.outputs.new_data == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh issue create \
+            --title "New data pending review — $(date -u +%Y-%m-%d)" \
+            --body "The daily pipeline found new surveys or notices.
+
+          **Bathymetry surveys** — open \`bathym_fixed.csv\` and find rows where \`confirmed=no\`. Review, then change to \`yes\`. Those surveys will appear on the live site after Render redeploys.
+
+          **Notices** — open \`notice_to_mariners/data/pending_notices.xlsx\`. Fill in any missing fields, mark each row **Y** (add to map) or **N** (discard), then run \`promote_notices.py\` locally and push the updated \`notices_YYYY.xlsx\`.
+
+          The live site only displays bathymetry rows where \`confirmed=yes\`."
