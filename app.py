@@ -303,16 +303,17 @@ def _build_river(shapefile_name, mm_name, display_name):
     return r_lons, r_lats, hover
 
 
-EXTRA_RIVERS = [
-    ("OHIO R",     "OHIO",     "Ohio River",     "#2166ac"),
-    ("MISSOURI R", "MISSOURI", "Missouri River", "#2166ac"),
-    ("ILLINOIS R", "ILLINOIS", "Illinois River", "#2166ac"),
-    ("ARKANSAS R", "ARKANSAS", "Arkansas River", "#2166ac"),
-]
-extra_river_data = [
-    (display, color, *_build_river(sf, mm, display))
-    for sf, mm, display, color in EXTRA_RIVERS
-]
+# EXTRA_RIVERS = [
+#     ("OHIO R",     "OHIO",     "Ohio River",     "#2166ac"),
+#     ("MISSOURI R", "MISSOURI", "Missouri River", "#2166ac"),
+#     ("ILLINOIS R", "ILLINOIS", "Illinois River", "#2166ac"),
+#     ("ARKANSAS R", "ARKANSAS", "Arkansas River", "#2166ac"),
+# ]
+# extra_river_data = [
+#     (display, color, *_build_river(sf, mm, display))
+#     for sf, mm, display, color in EXTRA_RIVERS
+# ]
+extra_river_data = []
 
 
 def _nearest_river_index(lon, lat):
@@ -655,18 +656,18 @@ def update_map(year, layers):
         showlegend=False,
     )
 )
-    for display, color, r_lons, r_lats, r_hover in extra_river_data:
-        if r_lons:
-            fig.add_trace(go.Scattermap(
-                lon=r_lons,
-                lat=r_lats,
-                mode="lines",
-                line=dict(color=color, width=2),
-                name=display,
-                hoverinfo="text",
-                hovertext=r_hover,
-                showlegend=False,
-            ))
+    # for display, color, r_lons, r_lats, r_hover in extra_river_data:
+    #     if r_lons:
+    #         fig.add_trace(go.Scattermap(
+    #             lon=r_lons,
+    #             lat=r_lats,
+    #             mode="lines",
+    #             line=dict(color=color, width=2),
+    #             name=display,
+    #             hoverinfo="text",
+    #             hovertext=r_hover,
+    #             showlegend=False,
+    #         ))
 
     # draft restriction lines drawn first so they sit behind bathymetry and the other notice layers.
     # a restriction shows if it's currently active (active == "Y"), or if it hasn't started yet
