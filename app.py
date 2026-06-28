@@ -73,6 +73,7 @@ bathy = gpd.GeoDataFrame(bathy, geometry="geometry", crs="EPSG:4326")
 bathy["rep_point"] = bathy.geometry.representative_point()
 bathy["LON"] = bathy["rep_point"].apply(lambda p: p.x)
 bathy["LAT"] = bathy["rep_point"].apply(lambda p: p.y)
+bathy = pd.DataFrame(bathy.drop(columns=["geometry", "rep_point"]))
 
 # get navigation notices (dredging/shoaling/draft restriction/other) from the manually
 # maintained notices_<year>.xlsx workbook(s) and locate them via mile markers or, for
@@ -256,6 +257,7 @@ lons = list(x)
 lats = list(y)
 river_lons_arr = np.array(lons)
 river_lats_arr = np.array(lats)
+del rivers, mississippi, river_line, lons, lats, x, y
 
 # pre-compute hover text for every river line vertex
 _mm = river_mile_points[river_mile_points["RIVER_NAME"].isin(["MISSISSIPPI-LO", "MISSISSIPPI-UP"])].copy()
@@ -269,38 +271,7 @@ river_hover = [
     f"<b>{_mm_display[row['RIVER_NAME']]}</b><br>Mile Marker {int(row['MILE'])}"
     for _, row in _matched.iterrows()
 ]
-
-
-def _build_river(shapefile_name, mm_name, display_name):
-    """Return (lons, lats, hover_texts) for a navigable river, clipped to its mile-marker extent."""
-    mm_sub = river_mile_points[river_mile_points["RIVER_NAME"] == mm_name]
-    if mm_sub.empty:
-        return [], [], []
-    buf = 0.5
-    clipped = rivers[rivers["PNAME"] == shapefile_name].cx[
-        mm_sub["LON"].min() - buf: mm_sub["LON"].max() + buf,
-        mm_sub["LAT"].min() - buf: mm_sub["LAT"].max() + buf,
-    ]
-    if clipped.empty:
-        return [], [], []
-    geom = linemerge(clipped.union_all())
-    lines = list(geom.geoms) if geom.geom_type == "MultiLineString" else [geom]
-    r_lons, r_lats = [], []
-    for line in lines:
-        x, y = line.xy
-        r_lons.extend(list(x) + [None])
-        r_lats.extend(list(y) + [None])
-    # nearest mile-marker hover per vertex (skip None separators)
-    mm_coords = mm_sub[["LAT", "LON"]].values
-    hover = []
-    for lo, la in zip(r_lons, r_lats):
-        if lo is None:
-            hover.append("")
-            continue
-        diffs = np.array([[la, lo]]) - mm_coords
-        nearest = mm_sub.iloc[(diffs ** 2).sum(axis=1).argmin()]
-        hover.append(f"<b>{display_name}</b><br>Mile Marker {int(nearest['MILE'])}")
-    return r_lons, r_lats, hover
+del _mm, _mm_display, _mm_coords, _rv_coords, _diffs, _idx, _matched
 
 
 # EXTRA_RIVERS = [
@@ -646,8 +617,8 @@ def update_map(year, layers):
     # plot river
     fig.add_trace(
     go.Scattermap(
-        lon=lons,
-        lat=lats,
+        lon=river_lons_arr,
+        lat=river_lats_arr,
         mode="lines",
         line=dict(color="#2166ac", width=2),
         name="Mississippi River",
