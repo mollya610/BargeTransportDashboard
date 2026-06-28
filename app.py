@@ -1,6 +1,8 @@
 import os
 import glob
+import json
 import textwrap
+from pathlib import Path
 import dash
 from dash import dcc, html, Input, Output, State
 import geopandas as gpd
@@ -74,6 +76,19 @@ bathy["rep_point"] = bathy.geometry.representative_point()
 bathy["LON"] = bathy["rep_point"].apply(lambda p: p.x)
 bathy["LAT"] = bathy["rep_point"].apply(lambda p: p.y)
 bathy = pd.DataFrame(bathy.drop(columns=["geometry", "rep_point"]))
+bathy["survey_id"] = (
+    bathy["file"]
+    .str.replace("_SurveyPoint.gpkg", "", regex=False)
+    .str.replace("_w_datum.gpkg", "", regex=False)
+    .str.replace(".gpkg", "", regex=False)
+)
+
+# survey IDs that have a depth polygon GeoJSON available for click-through detail
+_DEPTH_POLY_DIR = Path("update_bathym/data/DepthPolygons")
+DEPTH_POLY_FILES = {
+    f.stem.replace("_depth_polygons", "")
+    for f in _DEPTH_POLY_DIR.glob("*_depth_polygons.geojson")
+} if _DEPTH_POLY_DIR.exists() else set()
 
 # get navigation notices (dredging/shoaling/draft restriction/other) from the manually
 # maintained notices_<year>.xlsx workbook(s) and locate them via mile markers or, for
@@ -348,6 +363,38 @@ PLOTS_PANEL_OPEN = {
     "overflow-y": "auto",
 }
 
+# Colors for each depth bin polygon overlay (deep → shallow)
+DEPTH_POLY_COLORS = {
+    ">20 ft":      "#084594",
+    "17.5-20 ft":  "#2171b5",
+    "15-17.5 ft":  "#4292c6",
+    "14-15 ft":    "#74c476",
+    "13-14 ft":    "#a1d99b",
+    "12-13 ft":    "#fee08b",
+    "11-12 ft":    "#fdae61",
+    "10-11 ft":    "#f46d43",
+    "9-10 ft":     "#d73027",
+    "8-9 ft":      "#a50026",
+    "7-8 ft":      "#7b0000",
+    "6-7 ft":      "#9e0142",
+    "5-6 ft":      "#6a0136",
+    "<5 ft":       "#3d0026",
+}
+
+
+def _geom_to_lonlat(geom):
+    """Convert a shapely Polygon or MultiPolygon to parallel lon/lat lists for Scattermap fill."""
+    lons, lats = [], []
+    polys = list(geom.geoms) if geom.geom_type == "MultiPolygon" else [geom]
+    for poly in polys:
+        for coord in poly.exterior.coords:
+            lons.append(coord[0])
+            lats.append(coord[1])
+        lons.append(None)
+        lats.append(None)
+    return lons, lats
+
+
 # Style constants for the notice click-detail box, floating over the map. Shared by all
 # four notice categories - clicking any dredging/shoaling/draft/other marker opens it.
 NOTICE_DETAIL_HIDDEN = {"display": "none"}
@@ -362,6 +409,15 @@ MEMO_TEXT_HIDDEN = {"display": "none"}
 MEMO_TEXT_VISIBLE = {
     "display": "block", "font-size": SMALL, "color": "#444", "margin-top": "6px",
     "padding": "8px", "background": "#f4f4f4", "border-radius": "4px",
+}
+SURVEY_BANNER_HIDDEN = {"display": "none"}
+SURVEY_BANNER_VISIBLE = {
+    "position": "absolute", "bottom": "30px", "left": "50%",
+    "transform": "translateX(-50%)",
+    "zIndex": "25", "background": "rgba(255,255,255,0.95)",
+    "padding": "8px 16px", "border-radius": "20px",
+    "box-shadow": "0 2px 8px rgba(0,0,0,0.35)",
+    "font-family": "Arial, sans-serif", "display": "flex", "align-items": "center",
 }
 
 app.layout = html.Div(
@@ -390,6 +446,7 @@ app.layout = html.Div(
 
         dcc.Store(id="plots-panel-store", data=False),
         dcc.Store(id="notice-detail-store", data=None),
+        dcc.Store(id="selected-survey-store", data=None),
 
         ##################################
         # Map fills the full width; controls and plots panel float on top of it
@@ -415,6 +472,23 @@ app.layout = html.Div(
                             }
                         ),
                         html.Div(id="notice-detail-content")
+                    ]
+                ),
+
+                # Survey depth overlay banner — appears when a survey dot is clicked
+                html.Div(
+                    id="survey-detail-banner",
+                    style={"display": "none"},
+                    children=[
+                        html.Span(id="survey-detail-label", style={"font-size": "13px", "font-weight": "bold", "color": "#1a237e"}),
+                        html.Button(
+                            "✕ Close",
+                            id="survey-detail-close",
+                            style={
+                                "border": "none", "background": "none", "cursor": "pointer",
+                                "font-size": "12px", "color": "#888", "margin-left": "12px",
+                            }
+                        ),
                     ]
                 ),
 
@@ -589,12 +663,16 @@ def toggle_plots_panel(n_clicks, is_open):
 @app.callback(
     Output("map", "figure"),
     Input("year-slider", "value"),
-    Input("layer-toggle", "value")
+    Input("layer-toggle", "value"),
+    Input("selected-survey-store", "data"),
 )
-def update_map(year, layers):
+def update_map(year, layers, selected_survey):
 
     fig = go.Figure()
     df_b = bathy[bathy['year']==year]
+    # hide the dot for whichever survey is currently showing its polygon overlay
+    if selected_survey:
+        df_b = df_b[df_b["survey_id"] != selected_survey.get("survey_id")]
     df_n = notices[notices['year']==year]
     # plot river
     fig.add_trace(
@@ -703,6 +781,11 @@ def update_map(year, layers):
             if df_bin.empty:
                 continue
             df_bin["date_fmt"] = pd.to_datetime(df_bin["date"]).dt.strftime("%B %-d, %Y")
+            df_bin["click_hint"] = df_bin["survey_id"].apply(
+                lambda sid: "<i>Click for depth survey map</i>" if sid in DEPTH_POLY_FILES else ""
+            )
+            custom = df_bin[["date_fmt", "depth", "survey_id", "click_hint"]].copy()
+            custom.insert(0, "_type", "bathy")
             fig.add_trace(
                 go.Scattermap(
                     lon=df_bin["LON"],
@@ -713,12 +796,13 @@ def update_map(year, layers):
                     legendgroup="depth_survey",
                     legendgrouptitle_text="Survey Locations:<br>Depth Under Low Water",
                     legendrank=10,
-                    customdata=df_bin[["date_fmt", "depth"]],
+                    customdata=custom.values,
                     name=label,
                     hovertemplate=(
                         "<b><span style='font-size:16px'>Riverbed Survey</span></b><br>"
-                        "<span style='font-size:14px'>%{customdata[0]}</span><br>"
-                        "<span style='font-size:15px'>Estimated Depth under Low Water: <b>%{customdata[1]:.1f} ft</b></span><extra></extra>"
+                        "<span style='font-size:14px'>%{customdata[1]}</span><br>"
+                        "<span style='font-size:15px'>Estimated Depth under Low Water: <b>%{customdata[2]:.1f} ft</b></span><br>"
+                        "%{customdata[4]}<extra></extra>"
                     )
                 )
             )
@@ -858,6 +942,31 @@ def update_map(year, layers):
             )
         )
 
+    # depth polygon overlay for clicked survey
+    if selected_survey:
+        sid = selected_survey.get("survey_id", "")
+        poly_path = _DEPTH_POLY_DIR / f"{sid}_depth_polygons.geojson"
+        if poly_path.exists():
+            poly_gdf = gpd.read_file(poly_path).sort_values("bin_order")
+            for _, row in poly_gdf.iterrows():
+                bin_label = row["depth_bin"]
+                color = DEPTH_POLY_COLORS.get(bin_label, "#888888")
+                lons, lats = _geom_to_lonlat(row.geometry)
+                fig.add_trace(go.Scattermap(
+                    lon=lons,
+                    lat=lats,
+                    mode="lines",
+                    fill="toself",
+                    fillcolor=color,
+                    line=dict(width=0),
+                    opacity=0.75,
+                    name=bin_label,
+                    hoverinfo="text",
+                    hovertext=f"<b>{bin_label}</b>",
+                    hoverlabel=dict(bgcolor=color, bordercolor=color, font=dict(color="white")),
+                    showlegend=False,
+                ))
+
     # map layout
     fig.update_layout(
         map=dict(
@@ -926,6 +1035,47 @@ def render_notice_detail(data):
         ]
 
     return NOTICE_DETAIL_VISIBLE, children
+
+
+# --------------------------------------------------
+# SURVEY DEPTH POLYGON CLICK
+# --------------------------------------------------
+
+@app.callback(
+    Output("selected-survey-store", "data"),
+    Input("map", "clickData"),
+    Input("survey-detail-close", "n_clicks"),
+    State("selected-survey-store", "data"),
+    prevent_initial_call=True,
+)
+def handle_survey_click(click_data, n_close, current):
+    if dash.ctx.triggered_id == "survey-detail-close":
+        return None
+    if not click_data or not click_data.get("points"):
+        return dash.no_update
+    customdata = click_data["points"][0].get("customdata")
+    if not customdata or customdata[0] != "bathy":
+        return dash.no_update
+    survey_id = customdata[3]
+    if survey_id not in DEPTH_POLY_FILES:
+        return dash.no_update
+    # toggle off if clicking the same survey again
+    if current and current.get("survey_id") == survey_id:
+        return None
+    date_str = customdata[1]
+    return {"survey_id": survey_id, "date": date_str}
+
+
+@app.callback(
+    Output("survey-detail-banner", "style"),
+    Output("survey-detail-label", "children"),
+    Input("selected-survey-store", "data"),
+)
+def render_survey_banner(data):
+    if not data:
+        return SURVEY_BANNER_HIDDEN, ""
+    label = f"Depth survey: {data['survey_id']}  ·  {data['date']}"
+    return SURVEY_BANNER_VISIBLE, label
 
 
 # another callback for the barge rate plot
