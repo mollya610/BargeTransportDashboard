@@ -1,3 +1,4 @@
+import argparse
 import requests
 import zipfile
 import io
@@ -6,6 +7,11 @@ import geopandas as gpd
 from pathlib import Path
 import pdfplumber
 import sys
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--limit", type=int, default=None,
+                    help="Max surveys to download per type (LM and UM each); skips already-downloaded ones")
+args = parser.parse_args()
 
 # --- CONFIG -----------------
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -106,7 +112,14 @@ for num in range(2):
         new_ids = new_ids_um
         DISTRICTS = DISTRICTS_U
         processed_ids = processed_ids_um
+    downloaded_this_type = 0
     for survey_id in new_ids:
+        if args.limit is not None and downloaded_this_type >= args.limit:
+            break
+        gpkg_path = SURVEYPOINT_DIR / f"{survey_id}_SurveyPoint.gpkg"
+        if gpkg_path.exists():
+            print(f"Already downloaded: {survey_id}, skipping")
+            continue
         processed_ids.append(survey_id)
         datum_xyz = "Unknown"
         datum_pdf = "Unknown"
@@ -168,6 +181,7 @@ for num in range(2):
                     gdf_points.to_file(out_file, driver="GPKG")
                     print(f"Saved SurveyPoint layer for {survey_id} -> {out_file}")
                     gpkg_saved = True
+                    downloaded_this_type += 1
                 except Exception as e:
                     print(f"No SurveyPoint layer for {survey_id} or error: {e}")
                     failed_rows.append({"survey_id": survey_id, "reason": f"SurveyPoint extraction error: {e}"})
@@ -200,8 +214,11 @@ for num in range(2):
             "datum_source": datum_source,
             "url": url})
 
-metadata_df = pd.DataFrame(metadata_rows)
-metadata_df.to_csv(METADATA_FILE, index=False)
+new_meta = pd.DataFrame(metadata_rows)
+if METADATA_FILE.exists() and not new_meta.empty:
+    existing_meta = pd.read_csv(METADATA_FILE)
+    new_meta = pd.concat([existing_meta, new_meta]).drop_duplicates(subset="survey_id", keep="last")
+new_meta.to_csv(METADATA_FILE, index=False)
 print(f"Metadata saved to {METADATA_FILE}")
 
 # ------- Track every attempted survey as "done" so it isn't re-checked,

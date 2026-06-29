@@ -9,6 +9,7 @@ Run after process_surveys.py (and optionally compute_bathym_stats.py).
 Re-runs are safe: already-processed surveys are skipped.
 """
 
+import shutil
 from pathlib import Path
 
 import geopandas as gpd
@@ -153,3 +154,13 @@ for fpath in new_files:
     n_bins = len(dissolved)
     depth_range = f"{gdf_utm['depth_ft'].min():.1f}–{gdf_utm['depth_ft'].max():.1f} ft"
     print(f"{survey_id}: {n_pts} pts → {n_bins} depth-bin polygons, depth {depth_range}, mile {mile:.1f}")
+
+    # Clean up intermediate files now that the GeoJSON is confirmed written
+    navd88_gpkg = fpath  # already the NAVD88Files path
+    sp_gpkg = SCRIPT_DIR / "data" / "SurveyPointLayers" / fpath.name
+    sp_gdb = SCRIPT_DIR / "data" / "SurveyPointLayers" / f"{survey_id}_gdb"
+
+    navd88_gpkg.unlink(missing_ok=True)
+    sp_gpkg.unlink(missing_ok=True)
+    if sp_gdb.exists():
+        shutil.rmtree(sp_gdb)

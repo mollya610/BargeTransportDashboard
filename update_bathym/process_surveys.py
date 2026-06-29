@@ -45,8 +45,21 @@ milemarkers_gdf = gpd.GeoDataFrame(
 metadata = pd.read_csv(METADATA_FILE)[["survey_id", "datum"]]
 
 # ---------------- GET FILES TO PROCESS ----------------
-files = sorted(SURVEYPOINT_DIR.glob("*_SurveyPoint.gpkg"))
-print(f"Found {len(files)} SurveyPoint files.")
+all_files = sorted(SURVEYPOINT_DIR.glob("*_SurveyPoint.gpkg"))
+navd88_done = {f.name for f in NAVD88_DIR.glob("*_SurveyPoint.gpkg")}
+actual_done = {f.name for f in ACTUALDEPTH_DIR.glob("*_SurveyPoint.gpkg")}
+other_done = {f.stem for f in OTHER_DIR.glob("*.gpkg")}  # stems like "UM_SL_KBC_20260211_CS_1_UNKNOWN"
+
+def already_processed(fpath):
+    sid = fpath.name.replace("_SurveyPoint.gpkg", "")
+    return (
+        fpath.name in navd88_done
+        or fpath.name in actual_done
+        or any(s.startswith(sid) for s in other_done)
+    )
+
+files = [f for f in all_files if not already_processed(f)]
+print(f"Found {len(all_files)} SurveyPoint files, {len(files)} not yet processed.")
 
 
 def nearest_segment_id(midpoint_utm):
