@@ -124,6 +124,7 @@ notices = pd.concat(
     [pd.read_excel(f) for f in sorted(glob.glob("notices_*.xlsx"))],
     ignore_index=True
 )
+notices = notices[notices["confirmed"].fillna("").str.upper() == "Y"]
 notices["date_published"] = pd.to_datetime(notices["date_published"])
 notices["date_start"] = pd.to_datetime(notices["date_start"])
 notices["date_end"] = pd.to_datetime(notices["date_end"])
@@ -184,27 +185,34 @@ def _smooth_path(lons, lats, window=5):
     lat_s = pd.Series(lats).rolling(window, center=True, min_periods=1).mean()
     return lon_s.tolist(), lat_s.tolist()
 
-# get barge rate data  
-url = "https://www.ams.usda.gov/sites/default/files/media/GTRFigure10Table9.xlsx"
-response = requests.get(url, timeout=30)
-with open('freight_rates_southbound.xlsx', 'wb') as file:
-    file.write(response.content)
-freight_rates = pd.read_excel('freight_rates_southbound.xlsx',sheet_name='Table 9_data',header=2,usecols=range(5))
-barge_rates = freight_rates.rename(columns={'All Points':'week','ST LOUIS':'stlrate_per_ton'})
-barge_rates = barge_rates.drop(index=[0,1])
-barge_rates = barge_rates.loc[:,('week','stlrate_per_ton')]
-barge_rates['week'] = pd.to_datetime(barge_rates['week'])
-barge_rates['stlrate_per_ton'] = (barge_rates['stlrate_per_ton']*3.99)/100
-barge_rates['week_no']= barge_rates['week'].dt.isocalendar().week
-barge_rates['year'] = barge_rates['week'].dt.year
-barge_demand = barge_rates.groupby(['week_no'])['stlrate_per_ton'].mean().reset_index().rename(columns={'stlrate_per_ton':'avg_stlrate'})
-barge_std = barge_rates.groupby(['week_no'])['stlrate_per_ton'].std().reset_index().rename(columns={'stlrate_per_ton':'std_stlrate'})
-barge_rates = barge_rates.merge(barge_demand,on='week_no',how='inner')
-barge_rates = barge_rates.merge(barge_std,on='week_no',how='inner')
-barge_rates['plusone'] = barge_rates['avg_stlrate'] + barge_rates['std_stlrate']
-barge_rates['minusone'] = barge_rates['avg_stlrate'] - barge_rates['std_stlrate']
+# get barge rate data
+try:
+    url = "https://www.ams.usda.gov/sites/default/files/media/GTRFigure10Table9.xlsx"
+    response = requests.get(url, timeout=30)
+    response.raise_for_status()
+    if b'<!DOCTYPE' in response.content[:100] or b'<html' in response.content[:100]:
+        raise ValueError("USDA returned HTML instead of an xlsx file")
+    with open('freight_rates_southbound.xlsx', 'wb') as file:
+        file.write(response.content)
+    freight_rates = pd.read_excel('freight_rates_southbound.xlsx',sheet_name='Table 9_data',header=2,usecols=range(5))
+    barge_rates = freight_rates.rename(columns={'All Points':'week','ST LOUIS':'stlrate_per_ton'})
+    barge_rates = barge_rates.drop(index=[0,1])
+    barge_rates = barge_rates.loc[:,('week','stlrate_per_ton')]
+    barge_rates['week'] = pd.to_datetime(barge_rates['week'])
+    barge_rates['stlrate_per_ton'] = (barge_rates['stlrate_per_ton']*3.99)/100
+    barge_rates['week_no']= barge_rates['week'].dt.isocalendar().week
+    barge_rates['year'] = barge_rates['week'].dt.year
+    barge_demand = barge_rates.groupby(['week_no'])['stlrate_per_ton'].mean().reset_index().rename(columns={'stlrate_per_ton':'avg_stlrate'})
+    barge_std = barge_rates.groupby(['week_no'])['stlrate_per_ton'].std().reset_index().rename(columns={'stlrate_per_ton':'std_stlrate'})
+    barge_rates = barge_rates.merge(barge_demand,on='week_no',how='inner')
+    barge_rates = barge_rates.merge(barge_std,on='week_no',how='inner')
+    barge_rates['plusone'] = barge_rates['avg_stlrate'] + barge_rates['std_stlrate']
+    barge_rates['minusone'] = barge_rates['avg_stlrate'] - barge_rates['std_stlrate']
+except Exception as e:
+    print(f"Warning: could not load barge rate data ({e}). Freight rate chart will be empty.")
+    barge_rates = pd.DataFrame(columns=['week','stlrate_per_ton','week_no','year','avg_stlrate','std_stlrate','plusone','minusone'])
 
-end_date = barge_rates["week"].max()
+end_date = barge_rates["week"].max() if not barge_rates.empty else pd.Timestamp.today()
 start_date = end_date - pd.Timedelta(weeks=52)
 thisyear = date.today().year
 
@@ -220,45 +228,52 @@ greenv = greenv.merge(greenstd,on='week_no',how='inner')
 greenv['plusone'] = greenv['avg_stage'] + greenv['std_stage']
 greenv['minusone'] = greenv['avg_stage'] - greenv['std_stage']
 
-# now getting corn and soy price data 
-url = "https://www.ams.usda.gov/sites/default/files/media/GTRTable2A_B.xlsx"
-response = requests.get(url, timeout=30)
-with open('price_spreads_futures_usda.xlsx', 'wb') as file:
-    file.write(response.content)
-corn_soy_spread = pd.read_excel('price_spreads_futures_usda.xlsx',sheet_name='Data',header=1,usecols=range(9))
-corn_soy_spread = corn_soy_spread[(corn_soy_spread['Origin--destination']=='IL--Gulf')|(corn_soy_spread['Origin--destination']=='IL–Gulf')|(corn_soy_spread['Origin--destination']=='IA–Gulf')|(corn_soy_spread['Origin--destination']=='IA--Gulf')]
+# now getting corn and soy price data
+try:
+    url = "https://www.ams.usda.gov/sites/default/files/media/GTRTable2A_B.xlsx"
+    response = requests.get(url, timeout=30)
+    response.raise_for_status()
+    if b'<!DOCTYPE' in response.content[:100] or b'<html' in response.content[:100]:
+        raise ValueError("USDA returned HTML instead of an xlsx file")
+    with open('price_spreads_futures_usda.xlsx', 'wb') as file:
+        file.write(response.content)
+    corn_soy_spread = pd.read_excel('price_spreads_futures_usda.xlsx',sheet_name='Data',header=1,usecols=range(9))
+    corn_soy_spread = corn_soy_spread[(corn_soy_spread['Origin--destination']=='IL--Gulf')|(corn_soy_spread['Origin--destination']=='IL–Gulf')|(corn_soy_spread['Origin--destination']=='IA–Gulf')|(corn_soy_spread['Origin--destination']=='IA--Gulf')]
 
-corn_spread = corn_soy_spread[corn_soy_spread['Commodity']=='Corn'].rename(columns = {'Unnamed: 0':'date' , 'Destination Price':'gulf_corn_price'})
-corn_spread = corn_spread.loc[:,('date','gulf_corn_price')]
-corn_spread['date'] = pd.to_datetime(corn_spread['date'])
-corn_spread['week_no'] = corn_spread['date'].dt.isocalendar().week
-corn_spread['year'] = corn_spread['date'].dt.year
-corn_price = corn_spread[['date','week_no','year','gulf_corn_price']]
-corn_price['month'] = corn_price['date'].dt.month
-meancorn = corn_price.groupby(['month'])[['gulf_corn_price']].mean().reset_index().rename(columns={'gulf_corn_price':'avg_price'})
-stdcorn = corn_price.groupby(['month'])[['gulf_corn_price']].std().reset_index().rename(columns={'gulf_corn_price':'std_price'})
-corn_price = corn_price.merge(meancorn,on='month',how='inner')
-corn_price = corn_price.merge(stdcorn,on='month',how='inner')
-corn_price['plusone'] = corn_price['avg_price'] + corn_price['std_price']
-corn_price['minusone'] = corn_price['avg_price'] - corn_price['std_price']
+    corn_spread = corn_soy_spread[corn_soy_spread['Commodity']=='Corn'].rename(columns = {'Unnamed: 0':'date' , 'Destination Price':'gulf_corn_price'})
+    corn_spread = corn_spread.loc[:,('date','gulf_corn_price')]
+    corn_spread['date'] = pd.to_datetime(corn_spread['date'])
+    corn_spread['week_no'] = corn_spread['date'].dt.isocalendar().week
+    corn_spread['year'] = corn_spread['date'].dt.year
+    corn_price = corn_spread[['date','week_no','year','gulf_corn_price']]
+    corn_price['month'] = corn_price['date'].dt.month
+    meancorn = corn_price.groupby(['month'])[['gulf_corn_price']].mean().reset_index().rename(columns={'gulf_corn_price':'avg_price'})
+    stdcorn = corn_price.groupby(['month'])[['gulf_corn_price']].std().reset_index().rename(columns={'gulf_corn_price':'std_price'})
+    corn_price = corn_price.merge(meancorn,on='month',how='inner')
+    corn_price = corn_price.merge(stdcorn,on='month',how='inner')
+    corn_price['plusone'] = corn_price['avg_price'] + corn_price['std_price']
+    corn_price['minusone'] = corn_price['avg_price'] - corn_price['std_price']
 
-
-soy_spread = corn_soy_spread.rename(columns = {'Unnamed: 0':'date','Destination Price':'gulf_soy_price'})
-soy_spread['date'] = soy_spread['date'].shift(1)
-soy_spread = soy_spread[soy_spread['Commodity']=='Soybean']
-soy_spread['date'] = soy_spread['date'].shift(1)
-soy_spread = soy_spread.loc[:,('date','gulf_soy_price')]
-soy_spread['date'] = pd.to_datetime(soy_spread['date'])
-soy_spread['week_no'] = soy_spread['date'].dt.isocalendar().week
-soy_spread['year'] = soy_spread['date'].dt.year
-soy_price = soy_spread[['date','week_no','year','gulf_soy_price']]
-soy_price['month'] = soy_price['date'].dt.month
-meansoy = soy_price.groupby(['month'])[['gulf_soy_price']].mean().reset_index().rename(columns={'gulf_soy_price':'avg_price'})
-stdsoy = soy_price.groupby(['month'])[['gulf_soy_price']].std().reset_index().rename(columns={'gulf_soy_price':'std_price'})
-soy_price = soy_price.merge(meansoy,on='month',how='inner')
-soy_price = soy_price.merge(stdsoy,on='month',how='inner')
-soy_price['plusone'] = soy_price['avg_price'] + soy_price['std_price']
-soy_price['minusone'] = soy_price['avg_price'] - soy_price['std_price']
+    soy_spread = corn_soy_spread.rename(columns = {'Unnamed: 0':'date','Destination Price':'gulf_soy_price'})
+    soy_spread['date'] = soy_spread['date'].shift(1)
+    soy_spread = soy_spread[soy_spread['Commodity']=='Soybean']
+    soy_spread['date'] = soy_spread['date'].shift(1)
+    soy_spread = soy_spread.loc[:,('date','gulf_soy_price')]
+    soy_spread['date'] = pd.to_datetime(soy_spread['date'])
+    soy_spread['week_no'] = soy_spread['date'].dt.isocalendar().week
+    soy_spread['year'] = soy_spread['date'].dt.year
+    soy_price = soy_spread[['date','week_no','year','gulf_soy_price']]
+    soy_price['month'] = soy_price['date'].dt.month
+    meansoy = soy_price.groupby(['month'])[['gulf_soy_price']].mean().reset_index().rename(columns={'gulf_soy_price':'avg_price'})
+    stdsoy = soy_price.groupby(['month'])[['gulf_soy_price']].std().reset_index().rename(columns={'gulf_soy_price':'std_price'})
+    soy_price = soy_price.merge(meansoy,on='month',how='inner')
+    soy_price = soy_price.merge(stdsoy,on='month',how='inner')
+    soy_price['plusone'] = soy_price['avg_price'] + soy_price['std_price']
+    soy_price['minusone'] = soy_price['avg_price'] - soy_price['std_price']
+except Exception as e:
+    print(f"Warning: could not load corn/soy price data ({e}). Price charts will be empty.")
+    corn_price = pd.DataFrame(columns=['date','week_no','year','gulf_corn_price','month','avg_price','std_price','plusone','minusone'])
+    soy_price = pd.DataFrame(columns=['date','week_no','year','gulf_soy_price','month','avg_price','std_price','plusone','minusone'])
 
 
 # now get river line — filter to Mississippi at read time so the full shapefile is never loaded

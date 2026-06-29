@@ -52,7 +52,7 @@ jobs:
             update_bathym/data/DepthPolygons/ \
             update_bathym/lm_ids_done.csv \
             update_bathym/um_ids_done.csv \
-            notice_to_mariners/data/pending_notices.xlsx \
+            notices_*.xlsx \
             notice_to_mariners/last_run_date.csv 2>/dev/null || true
           if git diff --cached --quiet; then
             echo "new_data=false" >> "$GITHUB_OUTPUT"
@@ -83,6 +83,6 @@ jobs:
 
           **Bathymetry surveys** — open \`bathym_fixed.csv\` and find rows where \`confirmed=no\`. Review, then change to \`yes\`. Those surveys will appear on the live site after Render redeploys.
 
-          **Notices** — open \`notice_to_mariners/data/pending_notices.xlsx\`. Fill in any missing fields, mark each row **Y** (add to map) or **N** (discard), then run \`promote_notices.py\` locally and push the updated \`notices_YYYY.xlsx\`.
+          **Notices** — open \`notices_YYYY.xlsx\` for the relevant year. New rows have \`confirmed\` blank — fill in any missing fields and set \`confirmed=Y\` to show the notice on the map, or leave blank/set to N to hide it. Push the updated file when done.
 
-          The live site only displays bathymetry rows where \`confirmed=yes\`."
+          The live site only displays rows where \`confirmed=yes\` (bathymetry) or \`confirmed=Y\` (notices)."

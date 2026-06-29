@@ -16,12 +16,10 @@ DATA_DIR.mkdir(exist_ok=True)
 
 LAST_RUN_FILE = SCRIPT_DIR / "last_run_date.csv"
 OUTPUT_FILE = DATA_DIR / "relevant_notices.csv"
-PENDING_FILE = DATA_DIR / "pending_notices.xlsx"
 
-# columns of the manually-maintained notices_<year>.xlsx workbook that app.py reads for
-# the map - pending_notices.xlsx mirrors this schema plus a "confirmed" review column so
-# promote_notices.py can move reviewed rows over once Molly signs off
-PENDING_COLUMNS = [
+# columns written directly into notices_<year>.xlsx - new rows land with confirmed blank
+# so they don't appear on the map until Molly opens the file and sets confirmed=Y
+NOTICE_COLUMNS = [
     "date_published", "cancelled_date", "replaced_date", "active?", "message_id",
     "category", "other_notes", "dredge", "river", "mm_low", "mm_high", "lat", "lon",
     "date_start", "date_end", "northbound", "southbound", "location_details",
@@ -183,14 +181,13 @@ def extract_category(categories):
     return "other"
 
 
-def build_pending_rows(matched):
-    """Best-effort draft rows in the notices_<year>.xlsx schema for every newly-fetched
-    notice, regardless of category. Only the fields fetch_notices.py can extract
-    reliably (dates/IDs/category/river/mile markers/raw text) are filled in - the rest
-    (dredge vessel name, date_start/date_end, northbound/southbound text, lat/lon for
-    named-location dredging, cancellation/replacement links, active?) need a human to
-    read the notice and fill in, which is the whole point of the pending-review step."""
-    rows = pd.DataFrame({"confirmed": np.nan}, index=matched.index)
+def build_notice_rows(matched):
+    """Best-effort draft rows for every newly-fetched notice. Auto-extracted fields
+    (dates/IDs/category/river/mile markers/raw text) are filled in; the rest
+    (dredge vessel name, date_start/date_end, northbound/southbound, lat/lon, active?)
+    are left blank for Molly to fill in. confirmed is blank so rows don't appear on the
+    map until she sets it to Y."""
+    rows = pd.DataFrame(index=matched.index)
     rows["date_published"] = pd.to_datetime(matched["date_time_published_gmt"])
     rows["cancelled_date"] = pd.NaT
     rows["replaced_date"] = pd.NaT
@@ -211,19 +208,20 @@ def build_pending_rows(matched):
     rows["location_details"] = matched["geographic_area"]
     rows["instructions"] = np.nan
     rows["full_memo"] = matched["notes"]
-    return rows[PENDING_COLUMNS]
+    rows["confirmed"] = np.nan
+    return rows[NOTICE_COLUMNS]
 
 
-def print_notification_summary(matched, pending_new):
+def print_notification_summary(matched, new_rows):
     """Console 'notification' of every new notice found this run, Lower Mississippi
     sector notices called out separately since those are the ones Molly most wants to
     see, with everything else (mostly District 8 Gulf-wide advisories) listed after."""
     if matched.empty:
         return
-    # pending_new shares matched's index (build_pending_rows builds it row-for-row from
+    # new_rows shares matched's index (build_notice_rows builds it row-for-row from
     # matched) - join on that, not message_id, since NAVCEN sometimes reuses the same
     # message_id for a notice's later cancellation
-    category_by_idx = pending_new["category"]
+    category_by_idx = new_rows["category"]
 
     def _print_rows(df):
         for idx, row in df.iterrows():
@@ -240,9 +238,8 @@ def print_notification_summary(matched, pending_new):
     if not other.empty:
         print(f"\n=== {len(other)} other new notice(s) (District 8 / Gulf-wide, etc.) ===")
         _print_rows(other)
-    print(f"\n{len(pending_new)} draft row(s) added to {PENDING_FILE} for review.")
-    print("Open it, fill in/fix any fields, set 'confirmed' to Y (add to map) or N (discard) per row, "
-          "then run promote_notices.py.\n")
+    print(f"\n{len(new_rows)} draft row(s) added to notices_<year>.xlsx — open the file, "
+          "fill in/fix fields, set confirmed=Y to show on the map.\n")
 
 
 def main():
@@ -297,18 +294,24 @@ def main():
         combined.to_csv(OUTPUT_FILE, index=False)
         print(f"{len(matched)} new notices found; {len(combined)} total rows now in {OUTPUT_FILE}")
 
-        pending_new = build_pending_rows(matched)
-        if PENDING_FILE.exists():
-            existing_pending = pd.read_excel(PENDING_FILE)
-            pending_combined = pd.concat([existing_pending, pending_new], ignore_index=True)
-            # message_id alone isn't a safe dedup key - NAVCEN sometimes reuses a
-            # notice's message_id for its own later cancellation - so key on the pair
-            pending_combined = pending_combined.drop_duplicates(subset=["message_id", "date_published"], keep="first")
-        else:
-            pending_combined = pending_new
-        pending_combined.to_excel(PENDING_FILE, index=False)
+        new_rows = build_notice_rows(matched)
+        new_rows["date_published"] = pd.to_datetime(new_rows["date_published"])
+        for year, year_rows in new_rows.groupby(new_rows["date_published"].dt.year):
+            target = REPO_ROOT / f"notices_{year}.xlsx"
+            if target.exists():
+                existing_xl = pd.read_excel(target)
+                existing_xl["date_published"] = pd.to_datetime(existing_xl["date_published"])
+                combined_xl = pd.concat([existing_xl, year_rows], ignore_index=True)
+                # message_id alone isn't a safe dedup key - NAVCEN sometimes reuses a
+                # notice's message_id for its own later cancellation - so key on the pair
+                combined_xl = combined_xl.drop_duplicates(subset=["message_id", "date_published"], keep="first")
+            else:
+                combined_xl = year_rows
+            combined_xl = combined_xl.sort_values("date_published", ascending=False)
+            combined_xl.to_excel(target, index=False)
+            print(f"  {len(year_rows)} new row(s) added to {target} ({len(combined_xl)} total).")
 
-        print_notification_summary(matched, pending_new)
+        print_notification_summary(matched, new_rows)
     else:
         print("Nothing to process.")
 
