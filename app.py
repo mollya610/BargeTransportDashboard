@@ -673,16 +673,8 @@ app.layout = html.Div(
                                         },
                                         {
                                             "label": html.Span([
-                                                html.Div(style={
-                                                    "display": "inline-block",
-                                                    "width": "14px", "height": "14px",
-                                                    "border-radius": "50%",
-                                                    "background": "#1565c0",
-                                                    "border": "2px solid #90caf9",
-                                                    "vertical-align": "middle",
-                                                    "margin-right": "5px",
-                                                }),
-                                                "River Stage",
+                                                html.Img(src="/assets/raindrop.png", height="22", style={"vertical-align": "middle", "margin-right": "5px"}),
+                                                "Stream Gage",
                                             ]),
                                             "value": "stage",
                                         },
@@ -1050,21 +1042,34 @@ def update_map(year, layers, selected_survey):
 
     # river stage gage dots
     if "stage" in layers:
-        for gage_name, info in RIVER_GAGES.items():
-            fig.add_trace(go.Scattermap(
-                lon=[info["lon"]],
-                lat=[info["lat"]],
-                mode="markers+text",
-                marker=dict(size=18, color="#1565c0", opacity=1.0),
-                text=[gage_name],
-                textposition="top right",
-                textfont=dict(size=13, color="white"),
-                showlegend=False,
-                customdata=[["gage", gage_name]],
-                hovertext=f"<b>{gage_name} River Stage</b><br><i>Click for current reading</i>",
-                hoverinfo="text",
-                name=f"Gage: {gage_name}",
-            ))
+        gage_names = list(RIVER_GAGES.keys())
+        fig.add_trace(go.Scattermap(
+            lon=[info["lon"] for info in RIVER_GAGES.values()],
+            lat=[info["lat"] for info in RIVER_GAGES.values()],
+            mode="markers+text",
+            marker=dict(size=18, color="#1565c0", opacity=0),
+            text=gage_names,
+            textposition="top right",
+            textfont=dict(size=13, color="white"),
+            showlegend=False,
+            customdata=[["gage", gage_name] for gage_name in gage_names],
+            hovertext=[f"<b>{gage_name} River Stage</b><br><i>Click for current reading</i>" for gage_name in gage_names],
+            hoverinfo="text",
+            name="River Stage Gages",
+        ))
+        icon_layers.append({
+            "sourcetype": "geojson",
+            "source": {
+                "type": "FeatureCollection",
+                "features": [
+                    {"type": "Feature",
+                     "geometry": {"type": "Point", "coordinates": [info["lon"], info["lat"]]}}
+                    for info in RIVER_GAGES.values()
+                ],
+            },
+            "type": "symbol",
+            "symbol": {"icon": "gage-icon", "iconsize": 3},
+        })
 
     # depth polygon overlay for clicked survey
     if selected_survey:

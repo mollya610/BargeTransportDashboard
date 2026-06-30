@@ -5,6 +5,7 @@ window.addEventListener('load', function () {
     var ICONS = [
         { id: 'dredge-icon-15',   src: '/assets/dredge_marker.png' },
         { id: 'shoaling-icon-15', src: '/assets/shoaling_marker.png' },
+        { id: 'gage-icon-15',     src: '/assets/raindrop.png' },
     ];
     var iconListenerAdded = false;
 
