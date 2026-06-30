@@ -25,6 +25,7 @@ def read_csv_stage(filename, col_name):
             .assign(**{col_name: lambda d: pd.to_numeric(d[col_name], errors="coerce")}
             )[["date", col_name]])
     df["date"] = pd.to_datetime(df["date"]).dt.floor("D")
+    df.loc[~df[col_name].between(-100, 100), col_name] = np.nan
     return df
 
 def read_xlsx_stage(filename, col_name, header_row):
@@ -33,6 +34,7 @@ def read_xlsx_stage(filename, col_name, header_row):
             .assign(**{col_name: lambda d: pd.to_numeric(d[col_name], errors="coerce")}
             ).iloc[:-1, :2])
     df["date"] = pd.to_datetime(df["date"]).dt.floor("D")
+    df.loc[~df[col_name].between(-100, 100), col_name] = np.nan
     return df
 
 
@@ -90,6 +92,7 @@ GAGES = [
 
 # Gages above Cairo anchored to St. Louis = 0 ft; everything else to Memphis = -5 ft
 UPPER_GAGES = {"stlouis", "chester", "capegir"}
+SKIP_GAGES  = {"lakeprov"}  # backwater hysteresis — regression unreliable
 STLOUIS_TARGET = 0.0
 
 # --------------------------------------------------------------------------
@@ -97,7 +100,7 @@ STLOUIS_TARGET = 0.0
 # --------------------------------------------------------------------------
 merged_lower = memphis.copy()
 for name, df in GAGES:
-    if name in UPPER_GAGES or name == "memphis":
+    if name in UPPER_GAGES or name in SKIP_GAGES or name == "memphis":
         continue
     merged_lower = merged_lower.merge(df[df.iloc[:, 1].between(-100, 100)].copy(), on="date", how="outer")
 merged_lower = merged_lower.dropna(subset=["memphis"])
@@ -147,7 +150,7 @@ for i, (name, _) in enumerate(GAGES):
 
 print("--- Lower-river gages (Memphis = -5 ft anchor) ---")
 for i, (name, _) in enumerate(GAGES):
-    if name in UPPER_GAGES:
+    if name in UPPER_GAGES or name in SKIP_GAGES:
         continue
     datum88 = datums.loc[i, "Datum88"]
     if name == "memphis":
