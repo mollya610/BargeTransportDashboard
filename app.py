@@ -129,6 +129,14 @@ if _stage_csv.exists():
 else:
     river_stage_df = pd.DataFrame(columns=["date", "gage", "stage"])
 
+_climatology_csv = Path("river_stage_climatology.csv")
+if _climatology_csv.exists():
+    river_stage_climatology = pd.read_csv(_climatology_csv)
+else:
+    river_stage_climatology = pd.DataFrame(
+        columns=["gage", "day_of_year", "avg_stage", "p25_stage", "p75_stage", "n_obs"]
+    )
+
 mile_lookup = (
     pd.read_csv("update_bathym/usace_river_mile_markers.csv")
     .groupby(["RIVER_NAME", "MILE"])[["LON", "LAT"]].mean()
@@ -1268,11 +1276,13 @@ def render_gage_panel(data):
         return GAGE_DETAIL_VISIBLE, content, empty_fig
 
     df = df.sort_values("date").reset_index(drop=True)
-    df["rolling_mean"] = df["stage"].rolling(7, min_periods=1, center=True).mean()
+    df["day_of_year"] = df["date"].dt.dayofyear.where(df["date"].dt.dayofyear != 366, 365)
+    clim = river_stage_climatology[river_stage_climatology["gage"] == gage_name]
+    df = df.merge(clim.drop(columns="gage"), on="day_of_year", how="left")
 
     current_stage = df["stage"].iloc[-1]
-    current_mean  = df["rolling_mean"].iloc[-1]
-    diff          = current_stage - current_mean
+    current_avg   = df["avg_stage"].iloc[-1]
+    diff          = current_stage - current_avg
     diff_str      = f"+{diff:.2f}" if diff >= 0 else f"{diff:.2f}"
     diff_color    = "#c62828" if diff > 1 else ("#2e7d32" if diff < -1 else "#555")
 
@@ -1283,21 +1293,32 @@ def render_gage_panel(data):
             html.Span(f"{current_stage:.2f} ft", style={"font-size": "16px", "font-weight": "bold"}),
         ], style={"margin-bottom": "2px"}),
         html.Div([
-            html.Span("vs 7-day rolling avg: ", style={"font-size": "13px", "color": "#444"}),
+            html.Span("vs historical avg for this week: ", style={"font-size": "13px", "color": "#444"}),
             html.Span(diff_str + " ft", style={"font-size": "13px", "font-weight": "bold", "color": diff_color}),
         ], style={"margin-bottom": "10px"}),
     ]
 
     fig = go.Figure()
     fig.add_trace(go.Scatter(
+        x=df["date"], y=df["p75_stage"],
+        mode="lines", line=dict(width=0),
+        showlegend=False, hoverinfo="skip",
+    ))
+    fig.add_trace(go.Scatter(
+        x=df["date"], y=df["p25_stage"],
+        mode="lines", line=dict(width=0),
+        fill="tonexty", fillcolor="rgba(144,202,249,0.3)",
+        name="Historical 25th-75th pctile", hoverinfo="skip",
+    ))
+    fig.add_trace(go.Scatter(
+        x=df["date"], y=df["avg_stage"],
+        mode="lines", name="Historical avg (2000-2025)",
+        line=dict(color="#90caf9", width=2, dash="dash"),
+    ))
+    fig.add_trace(go.Scatter(
         x=df["date"], y=df["stage"],
         mode="lines", name="Daily stage",
         line=dict(color="#1565c0", width=2),
-    ))
-    fig.add_trace(go.Scatter(
-        x=df["date"], y=df["rolling_mean"],
-        mode="lines", name="7-day avg",
-        line=dict(color="#90caf9", width=2, dash="dash"),
     ))
     fig.add_trace(go.Scatter(
         x=[df["date"].iloc[-1]], y=[current_stage],
