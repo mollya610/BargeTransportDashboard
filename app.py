@@ -112,6 +112,23 @@ DEPTH_BINS = [
 # the workbook uses short river codes rather than the full names in the mile-marker table
 RIVER_CODE_MAP = {"LMR": "MISSISSIPPI-LO", "UMR": "MISSISSIPPI-UP", "ARK": "ARKANSAS"}
 
+# River stage gauge locations and data sources
+# St. Louis: USGS NWIS 07010000 (confirmed, correct NWS-equivalent datum)
+# Memphis / Greenville: NWS NWPS API (USACE main-stem gauges, local gage datum)
+RIVER_GAGES = {
+    "St. Louis": {"site": "07010000", "source": "usgs", "lat": 38.629,    "lon": -90.17977778},
+    "Memphis":   {"site": "MEMT1",    "source": "nws",  "lat": 35.123024, "lon": -90.077404},
+    "Greenville":{"site": "GEEM6",    "source": "nws",  "lat": 33.2854,   "lon": -91.15632222},
+}
+
+
+_stage_csv = Path("river_stage_history.csv")
+if _stage_csv.exists():
+    river_stage_df = pd.read_csv(_stage_csv, parse_dates=["date"])
+    river_stage_df["date"] = pd.to_datetime(river_stage_df["date"]).dt.normalize()
+else:
+    river_stage_df = pd.DataFrame(columns=["date", "gage", "stage"])
+
 mile_lookup = (
     pd.read_csv("update_bathym/usace_river_mile_markers.csv")
     .groupby(["RIVER_NAME", "MILE"])[["LON", "LAT"]].mean()
@@ -427,6 +444,22 @@ MEMO_TEXT_VISIBLE = {
     "display": "block", "font-size": SMALL, "color": "#444", "margin-top": "6px",
     "padding": "8px", "background": "#f4f4f4", "border-radius": "4px",
 }
+GAGE_DETAIL_HIDDEN = {"display": "none"}
+GAGE_DETAIL_VISIBLE = {
+    "position": "absolute", "top": "15px", "right": "15px", "zIndex": "30",
+    "width": "340px", "background": "rgba(255,255,255,0.97)",
+    "padding": "16px 18px 12px 18px", "border-radius": "8px",
+    "box-shadow": "0 2px 10px rgba(0,0,0,0.4)",
+    "font-family": "Arial, sans-serif",
+}
+SURVEY_LEGEND_HIDDEN = {"display": "none"}
+SURVEY_LEGEND_VISIBLE = {
+    "position": "absolute", "top": "15px", "right": "15px", "zIndex": "25",
+    "width": "200px", "background": "rgba(255,255,255,0.97)",
+    "padding": "14px 16px", "border-radius": "8px",
+    "box-shadow": "0 2px 10px rgba(0,0,0,0.4)",
+    "font-family": "Arial, sans-serif",
+}
 SURVEY_BANNER_HIDDEN = {"display": "none"}
 SURVEY_BANNER_VISIBLE = {
     "position": "absolute", "bottom": "30px", "left": "50%",
@@ -464,6 +497,7 @@ app.layout = html.Div(
         dcc.Store(id="plots-panel-store", data=False),
         dcc.Store(id="notice-detail-store", data=None),
         dcc.Store(id="selected-survey-store", data=None),
+        dcc.Store(id="selected-gage-store", data=None),
 
         ##################################
         # Map fills the full width; controls and plots panel float on top of it
@@ -505,6 +539,34 @@ app.layout = html.Div(
                                 "border": "none", "background": "none", "cursor": "pointer",
                                 "font-size": "12px", "color": "#888", "margin-left": "12px",
                             }
+                        ),
+                    ]
+                ),
+
+                # Survey depth legend — appears on the right when a survey map is shown
+                html.Div(
+                    id="survey-legend-box",
+                    style={"display": "none"},
+                    children=[html.Div(id="survey-legend-content")]
+                ),
+
+                # River stage detail panel — appears when a gage dot is clicked
+                html.Div(
+                    id="gage-detail-box",
+                    style={"display": "none"},
+                    children=[
+                        html.Button(
+                            "✕", id="gage-detail-close",
+                            style={
+                                "position": "absolute", "top": "8px", "right": "10px",
+                                "border": "none", "background": "none", "cursor": "pointer",
+                                "font-size": "16px", "color": "#888",
+                            }
+                        ),
+                        html.Div(id="gage-detail-content"),
+                        dcc.Loading(
+                            type="circle",
+                            children=dcc.Graph(id="gage-stage-plot", style={"height": "220px"}, config={"displayModeBar": False}),
                         ),
                     ]
                 ),
@@ -601,8 +663,23 @@ app.layout = html.Div(
                                             ]),
                                             "value": "draft",
                                         },
+                                        {
+                                            "label": html.Span([
+                                                html.Div(style={
+                                                    "display": "inline-block",
+                                                    "width": "14px", "height": "14px",
+                                                    "border-radius": "50%",
+                                                    "background": "#1565c0",
+                                                    "border": "2px solid #90caf9",
+                                                    "vertical-align": "middle",
+                                                    "margin-right": "5px",
+                                                }),
+                                                "River Stage",
+                                            ]),
+                                            "value": "stage",
+                                        },
                                     ],
-                                    value=["bathy", "dredging", "shoaling", "draft"],
+                                    value=["bathy", "dredging", "shoaling", "draft", "stage"],
                                     inputStyle={"margin-right": "6px"},
                                     labelStyle={"display": "flex", "align-items": "center", "margin-bottom": "5px", "font-size": "14px"},
                                 )
@@ -802,7 +879,10 @@ def update_map(year, layers, selected_survey):
             df_bin["click_hint"] = df_bin["survey_id"].apply(
                 lambda sid: "<i>Click for depth survey map</i>" if sid in DEPTH_POLY_FILES else ""
             )
-            custom = df_bin[["date_fmt", "depth", "survey_id", "click_hint"]].copy()
+            df_bin["gage_label"] = df_bin["milemarker"].apply(
+                lambda m: "St. Louis gage is at -3ft" if m >= 951 else "Memphis gage is at -10ft"
+            )
+            custom = df_bin[["date_fmt", "depth", "survey_id", "click_hint", "gage_label"]].copy()
             custom.insert(0, "_type", "bathy")
             fig.add_trace(
                 go.Scattermap(
@@ -819,7 +899,7 @@ def update_map(year, layers, selected_survey):
                     hovertemplate=(
                         "<b><span style='font-size:16px'>Riverbed Survey</span></b><br>"
                         "<span style='font-size:14px'>%{customdata[1]}</span><br>"
-                        "<span style='font-size:15px'>Estimated Depth under Low Water: <b>%{customdata[2]:.1f} ft</b></span><br>"
+                        "<span style='font-size:15px'>Average depth when %{customdata[5]}: <b>%{customdata[2]:.1f} ft</b></span><br>"
                         "%{customdata[4]}<extra></extra>"
                     )
                 )
@@ -960,6 +1040,24 @@ def update_map(year, layers, selected_survey):
             )
         )
 
+    # river stage gage dots
+    if "stage" in layers:
+        for gage_name, info in RIVER_GAGES.items():
+            fig.add_trace(go.Scattermap(
+                lon=[info["lon"]],
+                lat=[info["lat"]],
+                mode="markers+text",
+                marker=dict(size=18, color="#1565c0", opacity=1.0),
+                text=[gage_name],
+                textposition="top right",
+                textfont=dict(size=13, color="white"),
+                showlegend=False,
+                customdata=[["gage", gage_name]],
+                hovertext=f"<b>{gage_name} River Stage</b><br><i>Click for current reading</i>",
+                hoverinfo="text",
+                name=f"Gage: {gage_name}",
+            ))
+
     # depth polygon overlay for clicked survey
     if selected_survey:
         sid = selected_survey.get("survey_id", "")
@@ -1081,7 +1179,8 @@ def handle_survey_click(click_data, n_close, current):
     if current and current.get("survey_id") == survey_id:
         return None
     date_str = customdata[1]
-    return {"survey_id": survey_id, "date": date_str}
+    gage_label = customdata[5] if len(customdata) > 5 else "Memphis gage is at -10ft"
+    return {"survey_id": survey_id, "date": date_str, "gage_label": gage_label}
 
 
 @app.callback(
@@ -1094,6 +1193,128 @@ def render_survey_banner(data):
         return SURVEY_BANNER_HIDDEN, ""
     label = f"Depth survey: {data['survey_id']}  ·  {data['date']}"
     return SURVEY_BANNER_VISIBLE, label
+
+
+@app.callback(
+    Output("survey-legend-box", "style"),
+    Output("survey-legend-content", "children"),
+    Input("selected-survey-store", "data"),
+)
+def render_survey_legend(data):
+    if not data:
+        return SURVEY_LEGEND_HIDDEN, []
+    gage_label = data.get("gage_label", "Memphis gage is at -10ft")
+    title = f"Depth when {gage_label}"
+    rows = [
+        html.Div(
+            style={"display": "flex", "align-items": "center", "margin-bottom": "5px"},
+            children=[
+                html.Span(style={
+                    "display": "inline-block", "width": "18px", "height": "14px",
+                    "background": color, "border-radius": "2px", "flex-shrink": "0",
+                }),
+                html.Span(bin_label, style={"font-size": "12px", "margin-left": "8px"}),
+            ]
+        )
+        for bin_label, color in DEPTH_POLY_COLORS.items()
+    ]
+    content = [
+        html.Div(title, style={"font-size": "18px", "font-weight": "bold", "margin-bottom": "10px", "line-height": "1.3"}),
+    ] + rows
+    return SURVEY_LEGEND_VISIBLE, content
+
+
+@app.callback(
+    Output("selected-gage-store", "data"),
+    Input("map", "clickData"),
+    Input("gage-detail-close", "n_clicks"),
+    State("selected-gage-store", "data"),
+    prevent_initial_call=True,
+)
+def handle_gage_click(click_data, n_close, current):
+    if dash.ctx.triggered_id == "gage-detail-close":
+        return None
+    if not click_data or not click_data.get("points"):
+        return dash.no_update
+    customdata = click_data["points"][0].get("customdata")
+    if not customdata or customdata[0] != "gage":
+        return dash.no_update
+    gage_name = customdata[1]
+    if current and current.get("gage_name") == gage_name:
+        return None
+    return {"gage_name": gage_name}
+
+
+@app.callback(
+    Output("gage-detail-box", "style"),
+    Output("gage-detail-content", "children"),
+    Output("gage-stage-plot", "figure"),
+    Input("selected-gage-store", "data"),
+)
+def render_gage_panel(data):
+    empty_fig = go.Figure()
+    empty_fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", margin=dict(l=0,r=0,t=0,b=0))
+    if not data:
+        return GAGE_DETAIL_HIDDEN, [], empty_fig
+
+    gage_name = data["gage_name"]
+    cutoff = pd.Timestamp.today().normalize() - pd.Timedelta(days=29)
+    df = river_stage_df[
+        (river_stage_df["gage"] == gage_name) & (river_stage_df["date"] >= cutoff)
+    ][["date", "stage"]].sort_values("date").reset_index(drop=True)
+
+    if df.empty:
+        content = [html.P("Could not load stage data.", style={"color": "#888", "font-size": "13px"})]
+        return GAGE_DETAIL_VISIBLE, content, empty_fig
+
+    df = df.sort_values("date").reset_index(drop=True)
+    df["rolling_mean"] = df["stage"].rolling(7, min_periods=1, center=True).mean()
+
+    current_stage = df["stage"].iloc[-1]
+    current_mean  = df["rolling_mean"].iloc[-1]
+    diff          = current_stage - current_mean
+    diff_str      = f"+{diff:.2f}" if diff >= 0 else f"{diff:.2f}"
+    diff_color    = "#c62828" if diff > 1 else ("#2e7d32" if diff < -1 else "#555")
+
+    content = [
+        html.Div(gage_name, style={"font-size": "18px", "font-weight": "bold", "margin-bottom": "4px"}),
+        html.Div([
+            html.Span("Current stage: ", style={"font-size": "13px", "color": "#444"}),
+            html.Span(f"{current_stage:.2f} ft", style={"font-size": "16px", "font-weight": "bold"}),
+        ], style={"margin-bottom": "2px"}),
+        html.Div([
+            html.Span("vs 7-day rolling avg: ", style={"font-size": "13px", "color": "#444"}),
+            html.Span(diff_str + " ft", style={"font-size": "13px", "font-weight": "bold", "color": diff_color}),
+        ], style={"margin-bottom": "10px"}),
+    ]
+
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=df["date"], y=df["stage"],
+        mode="lines", name="Daily stage",
+        line=dict(color="#1565c0", width=2),
+    ))
+    fig.add_trace(go.Scatter(
+        x=df["date"], y=df["rolling_mean"],
+        mode="lines", name="7-day avg",
+        line=dict(color="#90caf9", width=2, dash="dash"),
+    ))
+    fig.add_trace(go.Scatter(
+        x=[df["date"].iloc[-1]], y=[current_stage],
+        mode="markers", name="Today",
+        marker=dict(color="#1565c0", size=8),
+        showlegend=False,
+    ))
+    fig.update_layout(
+        margin=dict(l=40, r=10, t=10, b=30),
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(245,248,255,1)",
+        legend=dict(orientation="h", yanchor="bottom", y=1.0, xanchor="left", x=0, font=dict(size=11)),
+        xaxis=dict(showgrid=False, tickfont=dict(size=10)),
+        yaxis=dict(title="Stage (ft)", gridcolor="#ddd", tickfont=dict(size=10), title_font=dict(size=11)),
+        hovermode="x unified",
+    )
+    return GAGE_DETAIL_VISIBLE, content, fig
 
 
 # another callback for the barge rate plot

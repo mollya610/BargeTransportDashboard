@@ -43,6 +43,10 @@ jobs:
       - name: Fetch new USCG notices
         run: python notice_to_mariners/fetch_notices.py
 
+      # ── River stage ───────────────────────────────────────────────────────────
+      - name: Fetch river stage readings
+        run: python fetch_stage.py
+
       # ── Detect whether anything actually changed ──────────────────────────────
       - name: Stage pipeline outputs
         id: stage
@@ -53,7 +57,8 @@ jobs:
             update_bathym/lm_ids_done.csv \
             update_bathym/um_ids_done.csv \
             notices_*.xlsx \
-            notice_to_mariners/last_run_date.csv 2>/dev/null || true
+            notice_to_mariners/last_run_date.csv \
+            river_stage_history.csv 2>/dev/null || true
           if git diff --cached --quiet; then
             echo "new_data=false" >> "$GITHUB_OUTPUT"
             echo "Nothing changed — no commit needed."
