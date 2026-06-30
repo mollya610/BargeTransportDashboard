@@ -217,7 +217,7 @@ start_date = end_date - pd.Timedelta(weeks=52)
 thisyear = date.today().year
 
 # water level 
-greenv = pd.read_excel('greenville_stage.xlsx',header=11,parse_dates=['Date / Time']).rename(columns={'Date / Time':'date','Stage (Ft)':'stage'}).assign(stage=lambda d: pd.to_numeric(d['stage'], errors='coerce'))[:-1]
+greenv = pd.read_excel('threshold calculation/greenville_stage.xlsx',header=11,parse_dates=['Date / Time']).rename(columns={'Date / Time':'date','Stage (Ft)':'stage'}).assign(stage=lambda d: pd.to_numeric(d['stage'], errors='coerce'))[:-1]
 greenv['date'] = pd.to_datetime(greenv['date'])
 greenv['year'] = greenv['date'].dt.year
 greenv['week_no'] = greenv['date'].dt.isocalendar().week
@@ -464,8 +464,6 @@ app.layout = html.Div(
         dcc.Store(id="plots-panel-store", data=False),
         dcc.Store(id="notice-detail-store", data=None),
         dcc.Store(id="selected-survey-store", data=None),
-        dcc.Interval(id="pulse-interval", interval=700, n_intervals=0),
-        html.Div(id="pulse-dummy", style={"display": "none"}),
 
         ##################################
         # Map fills the full width; controls and plots panel float on top of it
@@ -659,21 +657,6 @@ app.layout = html.Div(
 # PLOTS PANEL TOGGLE
 # --------------------------------------------------
 
-app.clientside_callback(
-    """
-    function(n_intervals) {
-        var graphEl = document.getElementById('map');
-        if (!graphEl || !graphEl.data) return window.dash_clientside.no_update;
-        var idx = graphEl.data.findIndex(function(t) { return t.name === '_pulse'; });
-        if (idx === -1) return window.dash_clientside.no_update;
-        var big = (n_intervals % 2 === 0);
-        Plotly.restyle('map', {'marker.size': [big ? 30 : 20], 'marker.opacity': [big ? 0.15 : 0.5]}, [idx]);
-        return window.dash_clientside.no_update;
-    }
-    """,
-    Output("pulse-dummy", "children"),
-    Input("pulse-interval", "n_intervals"),
-)
 
 @app.callback(
     Output("plots-panel", "style"),
@@ -923,18 +906,6 @@ def update_map(year, layers, selected_survey):
                 "type": "symbol",
                 "symbol": {"icon": "dredge-icon", "iconsize": 4},
             })
-            # pulse ring trace — active/upcoming notices only (completed ones stay static)
-            # TEMP: show all for demo
-            df_pulse = df_cat
-            fig.add_trace(go.Scattermap(
-                lon=df_pulse["lon"],
-                lat=df_pulse["lat"],
-                mode="markers",
-                marker=dict(size=22, color=CATEGORY_COLORS["dredging"], opacity=0.45),
-                hoverinfo="none",
-                showlegend=False,
-                name="_pulse",
-            ))
         else:
             fig.add_trace(
                 go.Scattermap(
@@ -1026,7 +997,7 @@ def update_map(year, layers, selected_survey):
         uirevision="keep-map",
         showlegend=False
     )
-    
+
     return fig
 
 

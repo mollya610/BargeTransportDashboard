@@ -24,8 +24,7 @@ NAVD88_DIR = DATA_DIR / "NAVD88Files"
 OUT_DIR = DATA_DIR / "DepthPolygons"
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
-LWRP7_FILE = SCRIPT_DIR / "lwrp7_info.csv"    # lower Mississippi (LM_*)
-LWRP14_FILE = SCRIPT_DIR / "lwrp14_info.csv"  # upper Mississippi (UM_*)
+DATUM_INFO_FILE = SCRIPT_DIR / "datum_info.csv"  # Memphis=-5ft water surface (combined miles)
 MILEMARKERS_FILE = SCRIPT_DIR / "usace_river_mile_markers.csv"
 
 UTM_CRS = "EPSG:26915"
@@ -81,8 +80,7 @@ def interp_lwrp(mile, df, mile_col, navd_col):
 
 
 # ── LOAD SUPPORT DATA ─────────────────────────────────────────────────────────
-lwrp7 = pd.read_csv(LWRP7_FILE)
-lwrp14 = pd.read_csv(LWRP14_FILE)
+datum_info = pd.read_csv(DATUM_INFO_FILE)  # MileMarker (combined), thresh_el (NAVD88)
 
 milemarkers = pd.read_csv(MILEMARKERS_FILE)
 mm_lo = milemarkers[milemarkers["RIVER_NAME"] == "MISSISSIPPI-LO"]
@@ -115,13 +113,11 @@ for fpath in new_files:
     gdf = gpd.read_file(fpath)          # EPSG:3857 from read_in_surveys.py
     gdf_utm = gdf.to_crs(UTM_CRS)
 
-    # Look up LWRP NAVD88 elevation at the survey's river mile
+    # Look up Memphis=-5ft water surface elevation at the survey's river mile
     midpoint_utm = gdf_utm.union_all().centroid
     mile = nearest_mile(midpoint_utm, is_lm)
-    if is_lm:
-        lwrp = interp_lwrp(mile, lwrp7, "MileMarker", "NAVD88_ft")
-    else:
-        lwrp = interp_lwrp(mile, lwrp14, "milemarkers", "navd88")
+    combined_mile = mile if is_lm else mile + 953
+    lwrp = interp_lwrp(combined_mile, datum_info, "MileMarker", "thresh_el")
 
     # Depth under LWRP at each point
     gdf_utm["depth_ft"] = lwrp - gdf_utm["Z_navd88"]

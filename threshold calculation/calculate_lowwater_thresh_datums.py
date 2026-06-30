@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
 """
 Calculate the water-surface elevation at each gage station corresponding to
-Memphis stage = -5 ft (a standard low-water threshold), then interpolate to
-every river mile marker and save datum_info.csv.
+Memphis stage = -10 ft / St. Louis = -3 ft low-water anchors, then interpolate
+to every river mile marker and save datum_info.csv.
 
 Method: linear regression of each gage's daily stage against Memphis daily
-stage over the full available record. The predicted stage at Memphis = -5 ft
+stage over the full available record. The predicted stage at the anchor value
 is converted to NAVD88 elevation using each gage's Datum88 offset.
 """
 
@@ -14,7 +14,7 @@ import pandas as pd
 import numpy as np
 
 DATA_DIR = Path(__file__).resolve().parent
-MEMPHIS_TARGET = -5.0  # ft relative to Memphis datum
+MEMPHIS_TARGET = -10.0  # ft relative to Memphis datum
 
 # --------------------------------------------------------------------------
 # READ STAGE DATA
@@ -25,7 +25,6 @@ def read_csv_stage(filename, col_name):
             .assign(**{col_name: lambda d: pd.to_numeric(d[col_name], errors="coerce")}
             )[["date", col_name]])
     df["date"] = pd.to_datetime(df["date"]).dt.floor("D")
-    df.loc[~df[col_name].between(-100, 100), col_name] = np.nan
     return df
 
 def read_xlsx_stage(filename, col_name, header_row):
@@ -34,7 +33,6 @@ def read_xlsx_stage(filename, col_name, header_row):
             .assign(**{col_name: lambda d: pd.to_numeric(d[col_name], errors="coerce")}
             ).iloc[:-1, :2])
     df["date"] = pd.to_datetime(df["date"]).dt.floor("D")
-    df.loc[~df[col_name].between(-100, 100), col_name] = np.nan
     return df
 
 
@@ -93,7 +91,7 @@ GAGES = [
 # Gages above Cairo anchored to St. Louis = 0 ft; everything else to Memphis = -5 ft
 UPPER_GAGES = {"stlouis", "chester", "capegir"}
 SKIP_GAGES  = {"lakeprov"}  # backwater hysteresis — regression unreliable
-STLOUIS_TARGET = 0.0
+STLOUIS_TARGET = -3.0
 
 # --------------------------------------------------------------------------
 # MERGE 1: lower-river gages with Memphis
@@ -148,7 +146,7 @@ for i, (name, _) in enumerate(GAGES):
     datums.loc[i, ["thresh_el", "r2", "n_obs"]] = thresh_el, round(r2, 4), n
     print(f"  {name:12s}  n={n:5d}  R²={r2:.4f}  predicted_stage={predicted_stage:6.2f} ft  thresh_el={thresh_el:.2f} ft NAVD88")
 
-print("--- Lower-river gages (Memphis = -5 ft anchor) ---")
+print("--- Lower-river gages (Memphis = -10 ft anchor) ---")
 for i, (name, _) in enumerate(GAGES):
     if name in UPPER_GAGES or name in SKIP_GAGES:
         continue
@@ -166,8 +164,8 @@ for i, (name, _) in enumerate(GAGES):
 # INTERPOLATE — two pieces, seam at mile 950/951
 # --------------------------------------------------------------------------
 datumsave = datums[["CityName", "LAT", "LON", "MileMarker", "thresh_el", "r2", "n_obs"]]
-datumsave.to_csv(DATA_DIR / "datum_thresholds_memphis_m5.csv", index=False)
-print(f"\nSaved per-gage thresholds to {DATA_DIR / 'datum_thresholds_memphis_m5.csv'}")
+datumsave.to_csv(DATA_DIR / "datum_thresholds_memphis_m10.csv", index=False)
+print(f"\nSaved per-gage thresholds to {DATA_DIR / 'datum_thresholds_memphis_m10.csv'}")
 
 def interp_piece(datum_rows, mile_range):
     """Outer-merge gage anchors with integer mile range, interpolate."""
@@ -209,6 +207,6 @@ markers = markers[["MILE_FULL", "LAT", "LON"]].rename(columns={"MILE_FULL": "Mil
 markers["MileMarker"] = markers["MileMarker"].astype(float)
 
 thresh_miles_m = thresh_miles.merge(markers, on="MileMarker", how="inner")
-out_path = DATA_DIR / "datum_info_memphis_m5.csv"
+out_path = DATA_DIR / "datum_info_memphis_m10.csv"
 thresh_miles_m.to_csv(out_path, index=False)
 print(f"Saved mile-marker thresholds to {out_path}")
