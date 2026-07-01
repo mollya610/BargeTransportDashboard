@@ -257,29 +257,53 @@ except Exception as e:
     soy_price = pd.DataFrame(columns=['date','week_no','year','gulf_soy_price','month','avg_price','std_price','plusone','minusone'])
 
 
-# now get river line — filter to Mississippi at read time so the full shapefile is never loaded
-mississippi = gpd.read_file('rivers_shapefile/rivers.shp', where="PNAME = 'MISSISSIPPI R'")
-mississippi = mississippi.set_crs('EPSG:4326')
-mississippi["geometry"] = mississippi.simplify(0.001)
+# now get river lines — filter to just the rivers we need at read time so the full
+# shapefile is never loaded into memory
+EXTRA_RIVERS = [
+    ("OHIO R",     "OHIO",     "Ohio River"),
+    ("MISSOURI R", "MISSOURI", "Missouri River"),
+    ("ILLINOIS R", "ILLINOIS", "Illinois River"),
+    ("ARKANSAS R", "ARKANSAS", "Arkansas River"),
+]
+_pnames = ", ".join(repr(p) for p in ["MISSISSIPPI R"] + [sf for sf, _, _ in EXTRA_RIVERS])
+rivers = gpd.read_file('rivers_shapefile/rivers.shp', where=f"PNAME IN ({_pnames})")
+rivers = rivers.set_crs('EPSG:4326')
+rivers["geometry"] = rivers.simplify(0.001)
+
+mississippi = rivers[rivers["PNAME"] == "MISSISSIPPI R"]
 river_line = linemerge(mississippi.union_all())
 x, y = river_line.xy
 river_lons_arr = np.array(list(x))
 river_lats_arr = np.array(list(y))
-del mississippi, river_line, x, y
 
 
+def _build_river(shapefile_name, mm_name):
+    """Return (lons, lats) for a navigable tributary, clipped to its mile-marker extent."""
+    mm_sub = river_mile_points[river_mile_points["RIVER_NAME"] == mm_name]
+    if mm_sub.empty:
+        return [], []
+    buf = 0.5
+    clipped = rivers[rivers["PNAME"] == shapefile_name].cx[
+        mm_sub["LON"].min() - buf: mm_sub["LON"].max() + buf,
+        mm_sub["LAT"].min() - buf: mm_sub["LAT"].max() + buf,
+    ]
+    if clipped.empty:
+        return [], []
+    geom = linemerge(clipped.union_all())
+    lines = list(geom.geoms) if geom.geom_type == "MultiLineString" else [geom]
+    r_lons, r_lats = [], []
+    for line in lines:
+        lx, ly = line.xy
+        r_lons.extend(list(lx) + [None])
+        r_lats.extend(list(ly) + [None])
+    return r_lons, r_lats
 
-# EXTRA_RIVERS = [
-#     ("OHIO R",     "OHIO",     "Ohio River",     "#2166ac"),
-#     ("MISSOURI R", "MISSOURI", "Missouri River", "#2166ac"),
-#     ("ILLINOIS R", "ILLINOIS", "Illinois River", "#2166ac"),
-#     ("ARKANSAS R", "ARKANSAS", "Arkansas River", "#2166ac"),
-# ]
-# extra_river_data = [
-#     (display, color, *_build_river(sf, mm, display))
-#     for sf, mm, display, color in EXTRA_RIVERS
-# ]
-extra_river_data = []
+
+extra_river_data = [
+    (display, *_build_river(sf, mm))
+    for sf, mm, display in EXTRA_RIVERS
+]
+del rivers, mississippi, river_line, x, y
 
 
 def _nearest_river_index(lon, lat):
@@ -736,18 +760,17 @@ def update_map(year, layers, selected_survey):
         showlegend=False,
     )
 )
-    # for display, color, r_lons, r_lats, r_hover in extra_river_data:
-    #     if r_lons:
-    #         fig.add_trace(go.Scattermap(
-    #             lon=r_lons,
-    #             lat=r_lats,
-    #             mode="lines",
-    #             line=dict(color=color, width=2),
-    #             name=display,
-    #             hoverinfo="text",
-    #             hovertext=r_hover,
-    #             showlegend=False,
-    #         ))
+    for display, r_lons, r_lats in extra_river_data:
+        if r_lons:
+            fig.add_trace(go.Scattermap(
+                lon=r_lons,
+                lat=r_lats,
+                mode="lines",
+                line=dict(color="#2166ac", width=1),
+                name=display,
+                hoverinfo="none",
+                showlegend=False,
+            ))
 
     # draft restriction lines drawn first so they sit behind bathymetry and the other notice layers.
     # a restriction shows if it's currently active (active == "Y"), or if it hasn't started yet
