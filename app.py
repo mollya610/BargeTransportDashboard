@@ -10,7 +10,6 @@ import plotly.graph_objects as go
 from shapely.ops import linemerge
 from datetime import date
 import numpy as np
-import requests
 import pandas as pd
 from shapely import wkt
 from PIL import Image, ImageDraw
@@ -210,21 +209,9 @@ def _smooth_path(lons, lats, window=5):
     lat_s = pd.Series(lats).rolling(window, center=True, min_periods=1).mean()
     return lon_s.tolist(), lat_s.tolist()
 
-# get barge rate data
+# get barge rate data (raw history fetched/updated daily by fetch_market_data.py)
 try:
-    url = "https://www.ams.usda.gov/sites/default/files/media/GTRFigure10Table9.xlsx"
-    response = requests.get(url, timeout=30)
-    response.raise_for_status()
-    if b'<!DOCTYPE' in response.content[:100] or b'<html' in response.content[:100]:
-        raise ValueError("USDA returned HTML instead of an xlsx file")
-    with open('freight_rates_southbound.xlsx', 'wb') as file:
-        file.write(response.content)
-    freight_rates = pd.read_excel('freight_rates_southbound.xlsx',sheet_name='Table 9_data',header=2,usecols=range(5))
-    barge_rates = freight_rates.rename(columns={'All Points':'week','ST LOUIS':'stlrate_per_ton'})
-    barge_rates = barge_rates.drop(index=[0,1])
-    barge_rates = barge_rates.loc[:,('week','stlrate_per_ton')]
-    barge_rates['week'] = pd.to_datetime(barge_rates['week'])
-    barge_rates['stlrate_per_ton'] = (barge_rates['stlrate_per_ton']*3.99)/100
+    barge_rates = pd.read_csv("barge_rates_history.csv", parse_dates=["week"])
     barge_rates['week_no']= barge_rates['week'].dt.isocalendar().week
     barge_rates['year'] = barge_rates['week'].dt.year
     barge_demand = barge_rates.groupby(['week_no'])['stlrate_per_ton'].mean().reset_index().rename(columns={'stlrate_per_ton':'avg_stlrate'})
@@ -241,36 +228,11 @@ end_date = barge_rates["week"].max() if not barge_rates.empty else pd.Timestamp.
 start_date = end_date - pd.Timedelta(weeks=52)
 thisyear = date.today().year
 
-# water level 
-greenv = pd.read_excel('threshold calculation/greenville_stage.xlsx',header=11,parse_dates=['Date / Time']).rename(columns={'Date / Time':'date','Stage (Ft)':'stage'}).assign(stage=lambda d: pd.to_numeric(d['stage'], errors='coerce'))[:-1]
-greenv['date'] = pd.to_datetime(greenv['date'])
-greenv['year'] = greenv['date'].dt.year
-greenv['week_no'] = greenv['date'].dt.isocalendar().week
-greenmean = greenv.groupby(['week_no'])['stage'].mean().reset_index().rename(columns={'stage':'avg_stage'})
-greenstd = greenv.groupby(['week_no'])['stage'].std().reset_index().rename(columns={'stage':'std_stage'})
-greenv = greenv.merge(greenmean,on='week_no',how='inner')
-greenv = greenv.merge(greenstd,on='week_no',how='inner')
-greenv['plusone'] = greenv['avg_stage'] + greenv['std_stage']
-greenv['minusone'] = greenv['avg_stage'] - greenv['std_stage']
-
-# now getting corn and soy price data
+# corn and soy price data (raw history fetched/updated daily by fetch_market_data.py)
 try:
-    url = "https://www.ams.usda.gov/sites/default/files/media/GTRTable2A_B.xlsx"
-    response = requests.get(url, timeout=30)
-    response.raise_for_status()
-    if b'<!DOCTYPE' in response.content[:100] or b'<html' in response.content[:100]:
-        raise ValueError("USDA returned HTML instead of an xlsx file")
-    with open('price_spreads_futures_usda.xlsx', 'wb') as file:
-        file.write(response.content)
-    corn_soy_spread = pd.read_excel('price_spreads_futures_usda.xlsx',sheet_name='Data',header=1,usecols=range(9))
-    corn_soy_spread = corn_soy_spread[(corn_soy_spread['Origin--destination']=='IL--Gulf')|(corn_soy_spread['Origin--destination']=='IL–Gulf')|(corn_soy_spread['Origin--destination']=='IA–Gulf')|(corn_soy_spread['Origin--destination']=='IA--Gulf')]
-
-    corn_spread = corn_soy_spread[corn_soy_spread['Commodity']=='Corn'].rename(columns = {'Unnamed: 0':'date' , 'Destination Price':'gulf_corn_price'})
-    corn_spread = corn_spread.loc[:,('date','gulf_corn_price')]
-    corn_spread['date'] = pd.to_datetime(corn_spread['date'])
-    corn_spread['week_no'] = corn_spread['date'].dt.isocalendar().week
-    corn_spread['year'] = corn_spread['date'].dt.year
-    corn_price = corn_spread[['date','week_no','year','gulf_corn_price']]
+    corn_price = pd.read_csv("corn_price_history.csv", parse_dates=["date"])
+    corn_price['week_no'] = corn_price['date'].dt.isocalendar().week
+    corn_price['year'] = corn_price['date'].dt.year
     corn_price['month'] = corn_price['date'].dt.month
     meancorn = corn_price.groupby(['month'])[['gulf_corn_price']].mean().reset_index().rename(columns={'gulf_corn_price':'avg_price'})
     stdcorn = corn_price.groupby(['month'])[['gulf_corn_price']].std().reset_index().rename(columns={'gulf_corn_price':'std_price'})
@@ -279,15 +241,9 @@ try:
     corn_price['plusone'] = corn_price['avg_price'] + corn_price['std_price']
     corn_price['minusone'] = corn_price['avg_price'] - corn_price['std_price']
 
-    soy_spread = corn_soy_spread.rename(columns = {'Unnamed: 0':'date','Destination Price':'gulf_soy_price'})
-    soy_spread['date'] = soy_spread['date'].shift(1)
-    soy_spread = soy_spread[soy_spread['Commodity']=='Soybean']
-    soy_spread['date'] = soy_spread['date'].shift(1)
-    soy_spread = soy_spread.loc[:,('date','gulf_soy_price')]
-    soy_spread['date'] = pd.to_datetime(soy_spread['date'])
-    soy_spread['week_no'] = soy_spread['date'].dt.isocalendar().week
-    soy_spread['year'] = soy_spread['date'].dt.year
-    soy_price = soy_spread[['date','week_no','year','gulf_soy_price']]
+    soy_price = pd.read_csv("soy_price_history.csv", parse_dates=["date"])
+    soy_price['week_no'] = soy_price['date'].dt.isocalendar().week
+    soy_price['year'] = soy_price['date'].dt.year
     soy_price['month'] = soy_price['date'].dt.month
     meansoy = soy_price.groupby(['month'])[['gulf_soy_price']].mean().reset_index().rename(columns={'gulf_soy_price':'avg_price'})
     stdsoy = soy_price.groupby(['month'])[['gulf_soy_price']].std().reset_index().rename(columns={'gulf_soy_price':'std_price'})
@@ -717,7 +673,6 @@ app.layout = html.Div(
                     style=PLOTS_PANEL_CLOSED,
                     children=[
                         dcc.Graph(id="barge-rate-plot", style={"height": "300px"}),
-                        dcc.Graph(id="water-plot", style={"height": "300px"}),
                         dcc.Graph(id="cornprice-plot", style={"height": "300px"}),
                         dcc.Graph(id="soyprice-plot", style={"height": "300px"})
                         # Additional plots can be added as more children
@@ -1386,51 +1341,7 @@ def update_barge_rate_plot(year):
     )
     return fig
 
-# water level plot 
-@app.callback(
-    Output("water-plot", "figure"),
-    Input("year-slider", "value")
-)
-def update_water_plot(year):
-    # filter barge rates by year
-    if year == thisyear: 
-        df365 = greenv[(greenv["date"] >= start_date) &(greenv["date"] <= end_date)]
-        title = "Greenville River Stage: Past 52 Weeks"
-    else: 
-        df365 = greenv[greenv['year']==year]
-        title = f"Greenville River Stage: {year}"
-
-    fig = go.Figure()
-    fig.add_trace(
-        go.Scatter(x=df365["date"],y=df365["stage"],
-            mode="lines",line=dict(width=2,color='#2b8cbe'),showlegend=False,name='Barge Rate')
-    )
-    fig.add_trace(
-        go.Scatter(x=df365["date"],y=df365["avg_stage"],
-            mode="lines",line=dict(width=2,color='grey'),name="Mean")
-    )
-    fig.add_trace(
-        go.Scatter(x=df365["date"],y=df365["plusone"],
-            mode="lines",line=dict(width=0),hoverinfo="skip",showlegend=False)
-    )
-    fig.add_trace(
-        go.Scatter(x=df365["date"],y=df365["minusone"],
-            mode="lines",fill="tonexty",fillcolor="rgba(160,160,160,0.3)",
-            name="±1 SD",line=dict(width=0),hoverinfo="skip")
-    )
-    fig.update_layout(title=title,
-        yaxis_title="Stage (ft)",
-        yaxis=dict(range=[greenv['stage'].min(), greenv['stage'].max()]),
-        height=300,legend=dict(
-           x=0.02,y=0.98,xanchor="left",yanchor="top",
-           bgcolor="rgba(255,255,255,0.6)",bordercolor="black",borderwidth=1),
-        margin=dict(l=50, r=20, t=40, b=40),
-        hovermode="x unified"
-    )
-    return fig
-
-
-#now a callback for corn price plot 
+#now a callback for corn price plot
 @app.callback(
     Output("cornprice-plot", "figure"),
     Input("year-slider", "value")

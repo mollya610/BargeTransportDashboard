@@ -47,6 +47,10 @@ jobs:
       - name: Fetch river stage readings
         run: python fetch_stage.py
 
+      # ── Barge rates / corn / soy prices ──────────────────────────────────────
+      - name: Fetch barge rate and price data
+        run: python fetch_market_data.py
+
       # ── Detect whether anything actually changed ──────────────────────────────
       - name: Stage pipeline outputs
         id: stage
@@ -58,7 +62,10 @@ jobs:
             update_bathym/um_ids_done.csv \
             notices_*.xlsx \
             notice_to_mariners/last_run_date.csv \
-            river_stage_history.csv 2>/dev/null || true
+            river_stage_history.csv \
+            barge_rates_history.csv \
+            corn_price_history.csv \
+            soy_price_history.csv 2>/dev/null || true
           if git diff --cached --quiet; then
             echo "new_data=false" >> "$GITHUB_OUTPUT"
             echo "Nothing changed — no commit needed."
