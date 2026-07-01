@@ -17,7 +17,8 @@ WINDOW_DAYS = 3
 
 def load_memphis():
     df = pd.read_excel(THRESH_DIR / "memphis_stage.xlsx", header=None)
-    df.columns = ["date", "stage", "_blank"]
+    df = df.iloc[:, :2]
+    df.columns = ["date", "stage"]
     df["date"] = pd.to_datetime(df["date"], format="mixed", errors="coerce")
     df["stage"] = pd.to_numeric(df["stage"], errors="coerce")
     df = df.dropna(subset=["date", "stage"])
