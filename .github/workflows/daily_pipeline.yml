@@ -92,7 +92,8 @@ jobs:
         run: |
           gh issue create \
             --title "New data pending review — $(date -u +%Y-%m-%d)" \
-            --body "The daily pipeline found new surveys or notices.
+            --assignee mollya610 \
+            --body "@mollya610 the daily pipeline found new surveys or notices.
 
           **Bathymetry surveys** — pull latest, then run \`python update_bathym/review_surveys.py\` locally and open http://127.0.0.1:8060 to review pending surveys (rows where \`confirmed=no\` in \`bathym_fixed.csv\`). Approving writes \`confirmed\`/\`at_risk\` back to the CSV. Push when done — those surveys will appear on the live site after Render redeploys and the next daily run generates their depth polygons.
 
