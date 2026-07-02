@@ -70,6 +70,8 @@ bathy["date_dt"] = pd.to_datetime(bathy["date"]).dt.tz_localize(None)
 years = sorted(bathy["year"].unique())
 years = [int(y) for y in years]
 
+bathy["at_risk_eff"] = bathy["at_risk"].fillna("no") if "at_risk" in bathy.columns else "no"
+
 # get center point for bathym measures
 bathy["geometry"] = bathy["geometry"].apply(wkt.loads)
 bathy = gpd.GeoDataFrame(bathy, geometry="geometry", crs="EPSG:4326")
@@ -101,11 +103,12 @@ DRAFT_ANNOUNCED_OPACITY = 0.45
 DRAFT_IN_PLACE_OPACITY = 0.85
 BIG, MED, SMALL = "18px", "14px", "11px"
 
-# bathymetry survey points are bucketed into 3 depth bins, each with its own color/size
-DEPTH_BINS = [
-    ("Above 20 ft", "#2e7d32", 8),
-    ("14-20 ft", "#ff9800", 13),
-    ("Below 14 ft", "#e53935", 18),
+# bathymetry survey points are colored by the review app's at_risk flag, not a depth
+# threshold -- red if flagged at risk, green otherwise (including legacy rows from
+# before at_risk existed, which default to "not at risk")
+RISK_BINS = [
+    ("Not At Risk", "#2e7d32", 9),
+    ("At Risk", "#e53935", 16),
 ]
 
 # the workbook uses short river codes rather than the full names in the mile-marker table
@@ -606,16 +609,12 @@ app.layout = html.Div(
                                                         style={"display": "flex", "gap": "10px", "margin-top": "5px", "margin-left": "4px"},
                                                         children=[
                                                             html.Div([
-                                                                html.Div(style={"width": "12px", "height": "12px", "border-radius": "50%", "background": DEPTH_BINS[0][1], "display": "inline-block", "margin-right": "4px", "vertical-align": "middle"}),
-                                                                html.Span("Low", style={"font-size": "12px", "vertical-align": "middle"}),
+                                                                html.Div(style={"width": "12px", "height": "12px", "border-radius": "50%", "background": RISK_BINS[0][1], "display": "inline-block", "margin-right": "4px", "vertical-align": "middle"}),
+                                                                html.Span("Not at risk", style={"font-size": "12px", "vertical-align": "middle"}),
                                                             ]),
                                                             html.Div([
-                                                                html.Div(style={"width": "12px", "height": "12px", "border-radius": "50%", "background": DEPTH_BINS[1][1], "display": "inline-block", "margin-right": "4px", "vertical-align": "middle"}),
-                                                                html.Span("Medium", style={"font-size": "12px", "vertical-align": "middle"}),
-                                                            ]),
-                                                            html.Div([
-                                                                html.Div(style={"width": "12px", "height": "12px", "border-radius": "50%", "background": DEPTH_BINS[2][1], "display": "inline-block", "margin-right": "4px", "vertical-align": "middle"}),
-                                                                html.Span("High", style={"font-size": "12px", "vertical-align": "middle"}),
+                                                                html.Div(style={"width": "12px", "height": "12px", "border-radius": "50%", "background": RISK_BINS[1][1], "display": "inline-block", "margin-right": "4px", "vertical-align": "middle"}),
+                                                                html.Span("At risk", style={"font-size": "12px", "vertical-align": "middle"}),
                                                             ]),
                                                         ]
                                                     ),
@@ -840,17 +839,16 @@ def update_map(year, layers, selected_survey):
             )
             shown_legend[status] = True
 
-    #  bathym layer - 3 depth bins, each its own trace so size/color/legend are discrete.
+    #  bathym layer - 2 risk bins (at_risk yes/no), each its own trace so color/legend are discrete.
     # drawn here (before dredging/shoaling/other) so it sits behind them on the map, but
     # legendrank pushes it below them in the legend regardless of draw order
     if "bathy" in layers:
-        depth_masks = {
-            "Above 20 ft": df_b["depth"] > 20,
-            "14-20 ft": (df_b["depth"] >= 14) & (df_b["depth"] <= 20),
-            "Below 14 ft": df_b["depth"] < 14,
+        risk_masks = {
+            "Not At Risk": df_b["at_risk_eff"] != "yes",
+            "At Risk": df_b["at_risk_eff"] == "yes",
         }
-        for label, color, size in DEPTH_BINS:
-            df_bin = df_b[depth_masks[label]].copy()
+        for label, color, size in RISK_BINS:
+            df_bin = df_b[risk_masks[label]].copy()
             if df_bin.empty:
                 continue
             df_bin["date_fmt"] = pd.to_datetime(df_bin["date"]).dt.strftime("%B %-d, %Y")
@@ -870,7 +868,7 @@ def update_map(year, layers, selected_survey):
                     marker=dict(size=size, color=color, opacity=1.0),
                     showlegend=True,
                     legendgroup="depth_survey",
-                    legendgrouptitle_text="Survey Locations:<br>Depth Under Low Water",
+                    legendgrouptitle_text="Survey Locations:<br>Navigation Risk under Low Water",
                     legendrank=10,
                     customdata=custom.values,
                     name=label,

@@ -19,10 +19,13 @@ from shapely.ops import unary_union
 
 # ── CONFIG ────────────────────────────────────────────────────────────────────
 SCRIPT_DIR = Path(__file__).resolve().parent
+REPO_ROOT = SCRIPT_DIR.parent
 DATA_DIR = SCRIPT_DIR / "data"
 NAVD88_DIR = DATA_DIR / "NAVD88Files"
 OUT_DIR = DATA_DIR / "DepthPolygons"
 OUT_DIR.mkdir(parents=True, exist_ok=True)
+
+CLEAN_BATHYMETRY_FILE = REPO_ROOT / "bathym_fixed.csv"  # gates on confirmed=="yes"
 
 DATUM_INFO_FILE = SCRIPT_DIR / "datum_info.csv"  # Memphis=-5ft water surface (combined miles)
 MILEMARKERS_FILE = SCRIPT_DIR / "usace_river_mile_markers.csv"
@@ -104,6 +107,16 @@ def nearest_mile(midpoint_utm, is_lm):
 files = sorted(NAVD88_DIR.glob("*_SurveyPoint.gpkg"))
 already_done = {f.stem.replace("_depth_polygons", "") for f in OUT_DIR.glob("*_depth_polygons.geojson")}
 new_files = [f for f in files if f.name.replace("_SurveyPoint.gpkg", "") not in already_done]
+
+# never delete raw data for a survey that hasn't been through review_surveys.py yet
+if CLEAN_BATHYMETRY_FILE.exists():
+    bathym_fixed = pd.read_csv(CLEAN_BATHYMETRY_FILE)
+    confirmed_files = set(bathym_fixed.loc[bathym_fixed["confirmed"] == "yes", "file"])
+    not_yet_confirmed = [f for f in new_files if f.name not in confirmed_files]
+    new_files = [f for f in new_files if f.name in confirmed_files]
+    if not_yet_confirmed:
+        print(f"{len(not_yet_confirmed)} survey(s) skipped, not yet confirmed via review_surveys.py")
+
 print(f"{len(new_files)} survey(s) to process ({len(files)} total, {len(already_done)} already done)")
 
 for fpath in new_files:

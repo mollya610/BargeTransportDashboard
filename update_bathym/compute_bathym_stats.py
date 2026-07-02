@@ -90,6 +90,7 @@ for fpath in new_files:
         "weights_sum": weights.sum(),
         "geometry": poly_tosave.wkt,
         "confirmed": "no",
+        "at_risk": "",
     })
 
 if not rows:
