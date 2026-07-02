@@ -395,4 +395,4 @@ def approve_survey(n_clicks, pending, index, percentile, threshold, flip_values,
 
 
 if __name__ == "__main__":
-    app.run(debug=True, port=8060)
+    app.run(debug=True, host="0.0.0.0", port=8060)
