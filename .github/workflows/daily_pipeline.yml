@@ -58,6 +58,7 @@ jobs:
           git add \
             bathym_fixed.csv \
             update_bathym/data/DepthPolygons/ \
+            update_bathym/data/NAVD88Files/ \
             update_bathym/lm_ids_done.csv \
             update_bathym/um_ids_done.csv \
             notices_*.xlsx \
@@ -93,7 +94,7 @@ jobs:
             --title "New data pending review — $(date -u +%Y-%m-%d)" \
             --body "The daily pipeline found new surveys or notices.
 
-          **Bathymetry surveys** — open \`bathym_fixed.csv\` and find rows where \`confirmed=no\`. Review, then change to \`yes\`. Those surveys will appear on the live site after Render redeploys.
+          **Bathymetry surveys** — pull latest, then run \`python update_bathym/review_surveys.py\` locally and open http://127.0.0.1:8060 to review pending surveys (rows where \`confirmed=no\` in \`bathym_fixed.csv\`). Approving writes \`confirmed\`/\`at_risk\` back to the CSV. Push when done — those surveys will appear on the live site after Render redeploys and the next daily run generates their depth polygons.
 
           **Notices** — open \`notices_YYYY.xlsx\` for the relevant year. New rows have \`confirmed\` blank — fill in any missing fields and set \`confirmed=Y\` to show the notice on the map, or leave blank/set to N to hide it. Push the updated file when done.
 

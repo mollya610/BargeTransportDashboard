@@ -8,7 +8,11 @@ price_spreads_futures_usda.xlsx
 
 # large pipeline output folders
 update_bathym/data/SurveyPointLayers/
-update_bathym/data/NAVD88Files/
 update_bathym/data/ActualDepthFiles/
 update_bathym/data/OtherDatumFiles/
 update_bathym/data/raw_xyz/
+
+# NAVD88Files/ is committed on purpose: review_surveys.py needs the raw gpkg
+# locally to review a survey before it's confirmed. make_depth_polygons.py
+# deletes each file once its polygon is generated, so this shouldn't grow
+# unbounded -- only unconfirmed/pending surveys should ever sit in git.
