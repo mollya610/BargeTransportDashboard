@@ -16,8 +16,11 @@ For each survey with confirmed=="no" in bathym_fixed.csv, shows:
 
 Molly can tweak the percentile/threshold, override the risk flag, preview a
 sign-convention fix, then Approve (writes confirmed="yes" + at_risk back to
-bathym_fixed.csv, and patches Z_navd88 in the gpkg if the sign was flipped) or
-Skip (leaves it pending for a later pass).
+bathym_fixed.csv, and patches Z_navd88 in the gpkg if the sign was flipped),
+Reject (writes confirmed="rejected" -- excluded from the live map and from
+future review, but the row stays in bathym_fixed.csv as a record of surveys
+read in but not posted -- and deletes the raw gpkg), or Skip (leaves it
+pending for a later pass).
 
 Local-only tool, never deployed -- runs on its own port, separate from app.py.
 """
@@ -269,6 +272,8 @@ app.layout = html.Div(
                 ),
 
                 html.Button("Skip", id="skip-btn", n_clicks=0, style={"padding": "8px 16px"}),
+                html.Button("Reject & Next", id="reject-btn", n_clicks=0,
+                            style={"padding": "8px 16px", "background": "#a50026", "color": "white", "border": "none"}),
                 html.Button("Approve & Next", id="approve-btn", n_clicks=0,
                             style={"padding": "8px 16px", "background": "#2166ac", "color": "white", "border": "none"}),
             ],
@@ -339,6 +344,38 @@ def skip_survey(n_clicks, pending, index):
     if not pending:
         return 0
     return (index + 1) % len(pending)
+
+
+@app.callback(
+    Output("pending-store", "data", allow_duplicate=True),
+    Output("index-store", "data", allow_duplicate=True),
+    Output("action-message", "children", allow_duplicate=True),
+    Input("reject-btn", "n_clicks"),
+    State("pending-store", "data"),
+    State("index-store", "data"),
+    prevent_initial_call=True,
+)
+def reject_survey(n_clicks, pending, index):
+    """Permanently exclude a survey: mark it "rejected" (never shown on the live
+    map, never re-queued for review) and delete its raw gpkg, since nothing
+    downstream needs it once it's rejected. The row stays in bathym_fixed.csv
+    as a record of surveys that were read in but deliberately not posted."""
+    if not pending:
+        return pending, index, "Nothing to reject."
+
+    index = index % len(pending)
+    file = pending[index]
+
+    df = load_bathym_fixed()
+    df.loc[df["file"] == file, "confirmed"] = "rejected"
+    df.to_csv(BATHYM_FIXED_FILE, index=False)
+
+    (NAVD88_DIR / file).unlink(missing_ok=True)
+
+    new_pending = get_pending_files()
+    new_index = min(index, max(len(new_pending) - 1, 0))
+    message = f"Rejected {file}." if new_pending else "Rejected. No surveys left pending."
+    return new_pending, new_index, message
 
 
 @app.callback(
