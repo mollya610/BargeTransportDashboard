@@ -1267,11 +1267,20 @@ def render_gage_panel(data):
     diff_str      = f"+{diff:.2f}" if diff >= 0 else f"{diff:.2f}"
     diff_color    = "#c62828" if diff > 1 else ("#2e7d32" if diff < -1 else "#555")
 
+    # NWS gages (Memphis, Greenville) report hourly -- the daily pipeline runs at
+    # 7am CT, so "today"'s row is a partial early-morning reading until tomorrow's
+    # run backfills it with the full day's last reading. St. Louis pulls USGS's own
+    # already-finalized daily value, so this caveat doesn't apply there.
+    is_today = df["date"].iloc[-1] == pd.Timestamp.today().normalize()
+    is_nws = RIVER_GAGES.get(gage_name, {}).get("source") == "nws"
+    today_note = " (as of ~7am CT)" if (is_today and is_nws) else ""
+
     content = [
         html.Div(gage_name, style={"font-size": "18px", "font-weight": "bold", "margin-bottom": "4px"}),
         html.Div([
             html.Span("Current stage: ", style={"font-size": "13px", "color": "#444"}),
             html.Span(f"{current_stage:.2f} ft", style={"font-size": "16px", "font-weight": "bold"}),
+            html.Span(today_note, style={"font-size": "11px", "color": "#888"}),
         ], style={"margin-bottom": "2px"}),
         html.Div([
             html.Span("vs historical avg for this week: ", style={"font-size": "13px", "color": "#444"}),
