@@ -14,6 +14,12 @@ For each survey with confirmed=="no" in bathym_fixed.csv, shows:
   - an auto "at risk" flag: yes if any point inside the nav-path outline is
     shallower than a threshold
 
+Clicking a point on the right-hand survey map marks the exact problem spot
+within the surveyed area. If the survey is approved as at-risk, that lon/lat
+is saved to bathym_fixed.csv (problem_lon/problem_lat) and app.py plots the
+survey's dot there instead of at the survey's overall center -- full (not at
+risk) surveys are unaffected and still center on the whole surveyed area.
+
 Molly can tweak the percentile/threshold, override the risk flag, preview a
 sign-convention fix, then Approve (writes confirmed="yes" + at_risk back to
 bathym_fixed.csv, and patches Z_navd88 in the gpkg if the sign was flipped),
@@ -147,7 +153,7 @@ def weighted_bathym_mean(gdf_utm, flip_sign):
 
 # ---------------- FIGURES ----------------
 
-def build_ais_figure(local_ais, nav_outline_utm, center):
+def build_ais_figure(local_ais, nav_outline_utm, center, uirevision=None):
     local_ais_4326 = local_ais.to_crs(4326)
     lons = local_ais_4326.geometry.x
     lats = local_ais_4326.geometry.y
@@ -171,13 +177,13 @@ def build_ais_figure(local_ais, nav_outline_utm, center):
             name="nav-path outline", hoverinfo="skip",
         ))
     fig.update_layout(
-        map=dict(style="carto-darkmatter", zoom=13, center=center),
+        map=dict(style="carto-darkmatter", zoom=13, center=center, uirevision=uirevision),
         margin=dict(l=0, r=0, t=0, b=0), showlegend=False,
     )
     return fig
 
 
-def build_survey_figure(points_utm, nav_outline_utm, threshold_ft, center):
+def build_survey_figure(points_utm, nav_outline_utm, threshold_ft, center, problem_point=None, uirevision=None):
     points_4326 = points_utm.to_crs(4326)
     lons = points_4326.geometry.x
     lats = points_4326.geometry.y
@@ -203,8 +209,14 @@ def build_survey_figure(points_utm, nav_outline_utm, threshold_ft, center):
             line=dict(width=2, color="#ffffff"),
             name="nav-path outline", hoverinfo="skip",
         ))
+    if problem_point is not None:
+        fig.add_trace(go.Scattermap(
+            lon=[problem_point["lon"]], lat=[problem_point["lat"]], mode="markers",
+            marker=dict(size=20, color="#000000", symbol="star"),
+            name="problem point", hoverinfo="skip",
+        ))
     fig.update_layout(
-        map=dict(style="carto-darkmatter", zoom=13, center=center),
+        map=dict(style="carto-darkmatter", zoom=13, center=center, uirevision=uirevision),
         margin=dict(l=0, r=0, t=0, b=0), showlegend=False,
     )
     return fig
@@ -229,9 +241,17 @@ app.layout = html.Div(
     children=[
         dcc.Store(id="pending-store", data=initial_pending),
         dcc.Store(id="index-store", data=0),
+        dcc.Store(id="problem-point-store", data=None),
 
         html.H3(id="queue-status"),
         html.Div(id="survey-header", style={"margin-bottom": "10px"}),
+        html.Div(
+            "Click a point on the survey map (right) to mark exactly where the problem "
+            "is -- if the survey is approved as at-risk, that point (instead of the "
+            "survey's overall center) is what shows up as the dot on the live map.",
+            id="problem-point-hint",
+            style={"margin-bottom": "6px", "font-size": "12px", "color": "#555"},
+        ),
 
         html.Div(
             style={"display": "flex", "gap": "10px"},
@@ -271,6 +291,7 @@ app.layout = html.Div(
                     value=[],
                 ),
 
+                html.Button("Clear problem point", id="clear-point-btn", n_clicks=0, style={"padding": "8px 16px"}),
                 html.Button("Skip", id="skip-btn", n_clicks=0, style={"padding": "8px 16px"}),
                 html.Button("Reject & Next", id="reject-btn", n_clicks=0,
                             style={"padding": "8px 16px", "background": "#a50026", "color": "white", "border": "none"}),
@@ -295,8 +316,9 @@ app.layout = html.Div(
     Input("percentile-slider", "value"),
     Input("threshold-input", "value"),
     Input("flip-sign-checkbox", "value"),
+    Input("problem-point-store", "data"),
 )
-def recompute(pending, index, percentile, threshold, flip_values):
+def recompute(pending, index, percentile, threshold, flip_values, problem_point):
     if not pending:
         empty = go.Figure()
         empty.update_layout(map=dict(style="carto-darkmatter"), margin=dict(l=0, r=0, t=0, b=0))
@@ -315,22 +337,53 @@ def recompute(pending, index, percentile, threshold, flip_values):
     center_pt = gpd.GeoSeries([points_utm.union_all().centroid], crs=UTM_CRS).to_crs(4326).iloc[0]
     center = dict(lat=center_pt.y, lon=center_pt.x)
 
-    ais_fig = build_ais_figure(local_ais, nav_outline_utm, center)
-    survey_fig = build_survey_figure(points_utm, nav_outline_utm, threshold, center)
+    # uirevision keyed to the file: keeps the operator's current pan/zoom when the
+    # figure is just rebuilt to add the problem-point marker or reflect a slider
+    # tweak, but resets the view when moving on to a different survey
+    ais_fig = build_ais_figure(local_ais, nav_outline_utm, center, uirevision=file)
+    survey_fig = build_survey_figure(points_utm, nav_outline_utm, threshold, center, problem_point, uirevision=file)
 
     badge_style = BADGE_YES if auto_flag == "yes" else BADGE_NO
-    header = html.Div([
+    header_spans = [
         html.Span(f"{file}", style={"font-weight": "bold", "margin-right": "14px"}),
         html.Span(f"date: {row['date']}", style={"margin-right": "14px"}),
         html.Span(f"stored bathym_mean: {row['bathym_mean']:.2f}, depth: {row['depth']:.2f} ft", style={"margin-right": "14px"}),
         html.Span(f"local depth range: {points_utm['depth_ft'].min():.1f}–{points_utm['depth_ft'].max():.1f} ft", style={"margin-right": "14px"}),
         html.Span(f"auto flag: {auto_flag}", style=badge_style),
-    ])
+    ]
+    if problem_point is not None:
+        header_spans.append(html.Span(
+            f"problem point set: {problem_point['lat']:.5f}, {problem_point['lon']:.5f}",
+            style={"margin-left": "14px", "font-style": "italic", "color": "#a50026"},
+        ))
+    header = html.Div(header_spans)
     status = f"Survey {index + 1} of {len(pending)} pending"
 
     triggered = ctx.triggered_id
     override_value = auto_flag if triggered in ("pending-store", "index-store", None) else no_update
     return ais_fig, survey_fig, header, status, override_value
+
+
+@app.callback(
+    Output("problem-point-store", "data"),
+    Input("survey-map", "clickData"),
+    Input("clear-point-btn", "n_clicks"),
+    Input("index-store", "data"),
+    Input("pending-store", "data"),
+    prevent_initial_call=True,
+)
+def update_problem_point(click_data, n_clear, index, pending):
+    """Track the operator-marked problem spot on the survey map. Reset whenever
+    the survey changes (index/pending) or the operator clears it explicitly;
+    otherwise take the lon/lat of whatever survey point was just clicked."""
+    triggered = ctx.triggered_id
+    if triggered in ("index-store", "pending-store", "clear-point-btn"):
+        return None
+    if click_data and click_data.get("points"):
+        pt = click_data["points"][0]
+        if "lon" in pt and "lat" in pt:
+            return {"lon": pt["lon"], "lat": pt["lat"]}
+    return no_update
 
 
 @app.callback(
@@ -389,9 +442,10 @@ def reject_survey(n_clicks, pending, index):
     State("threshold-input", "value"),
     State("flip-sign-checkbox", "value"),
     State("risk-override", "value"),
+    State("problem-point-store", "data"),
     prevent_initial_call=True,
 )
-def approve_survey(n_clicks, pending, index, percentile, threshold, flip_values, risk_value):
+def approve_survey(n_clicks, pending, index, percentile, threshold, flip_values, risk_value, problem_point):
     if not pending:
         return pending, index, "Nothing to approve."
 
@@ -404,11 +458,13 @@ def approve_survey(n_clicks, pending, index, percentile, threshold, flip_values,
     row = df.loc[mask].iloc[0]
     water_elev = float(row["water_elev"])
 
-    # an all-blank at_risk column round-trips through CSV as NaN/float64 (compute_bathym_stats.py
-    # writes "" for new rows), which then rejects a "yes"/"no" string assignment -- force object dtype
-    if "at_risk" not in df.columns:
-        df["at_risk"] = None
-    df["at_risk"] = df["at_risk"].astype(object)
+    # an all-blank at_risk/problem_lon/problem_lat column round-trips through CSV as
+    # NaN/float64 (compute_bathym_stats.py writes "" for new rows), which then rejects
+    # a string/float assignment later -- force object dtype (and create if missing)
+    for col in ("at_risk", "problem_lon", "problem_lat"):
+        if col not in df.columns:
+            df[col] = None
+        df[col] = df[col].astype(object)
 
     if flip_sign:
         gpkg_path = NAVD88_DIR / file
@@ -423,6 +479,14 @@ def approve_survey(n_clicks, pending, index, percentile, threshold, flip_values,
 
     df.loc[mask, "confirmed"] = "yes"
     df.loc[mask, "at_risk"] = risk_value
+    # the problem point only means anything for a survey that's actually flagged at
+    # risk -- otherwise clear it so a stale mark can't linger from an earlier pass
+    if risk_value == "yes" and problem_point is not None:
+        df.loc[mask, "problem_lon"] = problem_point["lon"]
+        df.loc[mask, "problem_lat"] = problem_point["lat"]
+    else:
+        df.loc[mask, "problem_lon"] = None
+        df.loc[mask, "problem_lat"] = None
     df.to_csv(BATHYM_FIXED_FILE, index=False)
 
     new_pending = get_pending_files()

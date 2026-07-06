@@ -91,6 +91,8 @@ for fpath in new_files:
         "geometry": poly_tosave.wkt,
         "confirmed": "no",
         "at_risk": "",
+        "problem_lon": "",
+        "problem_lat": "",
     })
 
 if not rows:

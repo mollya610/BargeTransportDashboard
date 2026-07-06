@@ -79,6 +79,18 @@ bathy["rep_point"] = bathy.geometry.representative_point()
 bathy["LON"] = bathy["rep_point"].apply(lambda p: p.x)
 bathy["LAT"] = bathy["rep_point"].apply(lambda p: p.y)
 bathy = pd.DataFrame(bathy.drop(columns=["geometry", "rep_point"]))
+
+# for at-risk surveys, the reviewer can mark the exact problem spot within the
+# surveyed area (review_surveys.py) -- plot the dot there instead of the survey's
+# overall center so it points at the actual issue on a large survey. Full (not at
+# risk) surveys always show at their overall center, marked surveys keep no other
+# behavior change.
+if "problem_lon" in bathy.columns and "problem_lat" in bathy.columns:
+    problem_lon = pd.to_numeric(bathy["problem_lon"], errors="coerce")
+    problem_lat = pd.to_numeric(bathy["problem_lat"], errors="coerce")
+    has_problem_point = (bathy["at_risk_eff"] == "yes") & problem_lon.notna() & problem_lat.notna()
+    bathy.loc[has_problem_point, "LON"] = problem_lon[has_problem_point]
+    bathy.loc[has_problem_point, "LAT"] = problem_lat[has_problem_point]
 bathy["survey_id"] = (
     bathy["file"]
     .str.replace("_SurveyPoint.gpkg", "", regex=False)
