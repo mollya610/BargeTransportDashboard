@@ -4,6 +4,7 @@ from pathlib import Path
 import geopandas as gpd
 import numpy as np
 import pandas as pd
+from shapely import wkt as shapely_wkt
 
 # ---------------- CONFIG ----------------
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -43,6 +44,32 @@ else:
     existing = pd.DataFrame()
     done_files = set()
 
+# ---------------- DUPLICATE-SURVEY DETECTION ----------------
+# USACE's eHydro source occasionally republishes the exact same physical survey
+# under a second surveyjobidpk (confirmed 2026-07-08 via the FeatureServer: e.g.
+# UM_SL_PRC_20260213_CS_1 "Prototype Reach" and UM_SL_ILC_20260213_CS_1 "Ivory
+# Landing" are two different source records with identical survey geometry).
+# Flag -- don't dedup automatically -- since a reviewer needs to judge which
+# copy (if either) is trustworthy; existing duplicates already in bathym_fixed.csv
+# are being handled separately via a full redownload/reprocess, not here.
+DUP_ROUND = 4  # ~11m at these latitudes
+
+
+def _dup_key(geom_wkt, date_val):
+    try:
+        rep = shapely_wkt.loads(geom_wkt).representative_point()
+    except Exception:
+        return None
+    return (round(rep.x, DUP_ROUND), round(rep.y, DUP_ROUND), str(date_val)[:10])
+
+
+dup_index = {}
+if not existing.empty and "geometry" in existing.columns:
+    for _, r in existing.iterrows():
+        key = _dup_key(r["geometry"], r["date"])
+        if key:
+            dup_index.setdefault(key, []).append(r["file"])
+
 files = sorted(NAVD88_DIR.glob("*_SurveyPoint.gpkg"))
 new_files = [f for f in files if f.name not in done_files]
 print(f"{len(new_files)} new survey(s) to process ({len(files)} total in NAVD88Files)")
@@ -77,6 +104,15 @@ for fpath in new_files:
     water_elev = float(nearest_row["thresh_el"])
     milemarker = nearest_row["MileMarker"]
 
+    key = _dup_key(poly_tosave.wkt, date)
+    dup_matches = dup_index.get(key, []) if key else []
+    if dup_matches:
+        print(f"  WARNING: possible duplicate of {', '.join(dup_matches)} (same location + date)")
+    duplicate_of = ", ".join(dup_matches)
+    # register this survey too, so a second new one in the same run also catches it
+    if key:
+        dup_index.setdefault(key, []).append(fpath.name)
+
     rows.append({
         "file": fpath.name,
         "date": date,
@@ -93,6 +129,7 @@ for fpath in new_files:
         "at_risk": "",
         "problem_lon": "",
         "problem_lat": "",
+        "duplicate_of": duplicate_of,
     })
 
 if not rows:

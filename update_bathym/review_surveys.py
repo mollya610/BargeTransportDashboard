@@ -59,6 +59,55 @@ SIMPLIFY_M = 5  # same idiom as make_depth_polygons.py
 DEFAULT_PERCENTILE = 80
 DEFAULT_DEPTH_THRESHOLD = 13
 
+# Same depth bins/colors as make_depth_polygons.py (stage 5) and app.py's
+# DEPTH_POLY_COLORS, duplicated here rather than imported since both of those
+# modules run their processing as top-level script code on import. Keep in sync
+# by hand if the bins/colors ever change.
+DEPTH_BINS = [
+    (20,   None,  ">20 ft"),
+    (17.5, 20,    "17.5-20 ft"),
+    (15,   17.5,  "15-17.5 ft"),
+    (14,   15,    "14-15 ft"),
+    (13,   14,    "13-14 ft"),
+    (12,   13,    "12-13 ft"),
+    (11,   12,    "11-12 ft"),
+    (10,   11,    "10-11 ft"),
+    (9,    10,    "9-10 ft"),
+    (8,    9,     "8-9 ft"),
+    (7,    8,     "7-8 ft"),
+    (6,    7,     "6-7 ft"),
+    (5,    6,     "5-6 ft"),
+    (None, 5,     "<5 ft"),
+]
+BIN_ORDER = {label: i for i, (_, _, label) in enumerate(DEPTH_BINS)}
+DEPTH_POLY_COLORS = {
+    ">20 ft":      "#084594",
+    "17.5-20 ft":  "#2171b5",
+    "15-17.5 ft":  "#4292c6",
+    "14-15 ft":    "#74c476",
+    "13-14 ft":    "#a1d99b",
+    "12-13 ft":    "#fee08b",
+    "11-12 ft":    "#fdae61",
+    "10-11 ft":    "#f46d43",
+    "9-10 ft":     "#d73027",
+    "8-9 ft":      "#a50026",
+    "7-8 ft":      "#7b0000",
+    "6-7 ft":      "#9e0142",
+    "5-6 ft":      "#6a0136",
+    "<5 ft":       "#3d0026",
+}
+
+
+def assign_depth_bin(depth):
+    for lo, hi, label in DEPTH_BINS:
+        if lo is not None and depth < lo:
+            continue
+        if hi is not None and depth >= hi:
+            continue
+        return label
+    return None
+
+
 # ---------------- LOAD SUPPORT DATA (once, at module load) ----------------
 corridor_df = pd.read_csv(CORRIDOR_FILE)
 corridor = gpd.GeoDataFrame(
@@ -188,36 +237,45 @@ def build_survey_figure(points_utm, nav_outline_utm, threshold_ft, center, probl
     lons = points_4326.geometry.x
     lats = points_4326.geometry.y
     depth = points_utm["depth_ft"]
-    sizes = np.where(depth <= threshold_ft, 9, 5)
+    # larger dots below threshold (kept), color by the same discrete depth bins/palette
+    # as the depth-polygon overlay on the main app (app.py's DEPTH_POLY_COLORS) instead
+    # of a continuous scale, so a survey looks the same way here as it will once posted
+    sizes = pd.Series(np.where(depth <= threshold_ft, 9, 5), index=depth.index)
+    bins = depth.apply(assign_depth_bin)
+
     fig = go.Figure()
-    fig.add_trace(go.Scattermap(
-        lon=lons, lat=lats, mode="markers",
-        marker=dict(
-            size=sizes, color=depth, colorscale="RdYlBu",
-            cmin=float(depth.min()), cmax=float(depth.max()),
-            showscale=True, colorbar=dict(title="Depth (ft)", len=0.6),
-        ),
-        hovertext=[f"{d:.1f} ft" for d in depth],
-        hoverinfo="text",
-        name="survey points",
-    ))
+    for label in sorted(bins.dropna().unique(), key=lambda l: BIN_ORDER.get(l, 999)):
+        mask = bins == label
+        fig.add_trace(go.Scattermap(
+            lon=lons[mask], lat=lats[mask], mode="markers",
+            marker=dict(size=sizes[mask], color=DEPTH_POLY_COLORS.get(label, "#888888")),
+            hovertext=[f"{d:.1f} ft" for d in depth[mask]],
+            hoverinfo="text",
+            name=label,
+        ))
     if nav_outline_utm is not None and not nav_outline_utm.is_empty:
         outline_4326 = gpd.GeoSeries([nav_outline_utm], crs=UTM_CRS).to_crs(4326).iloc[0]
         lons_o, lats_o = _geom_to_lonlat(outline_4326)
         fig.add_trace(go.Scattermap(
             lon=lons_o, lat=lats_o, mode="lines",
             line=dict(width=2, color="#ffffff"),
-            name="nav-path outline", hoverinfo="skip",
+            name="nav-path outline", hoverinfo="skip", showlegend=False,
         ))
     if problem_point is not None:
         fig.add_trace(go.Scattermap(
             lon=[problem_point["lon"]], lat=[problem_point["lat"]], mode="markers",
             marker=dict(size=20, color="#000000", symbol="star"),
-            name="problem point", hoverinfo="skip",
+            name="problem point", hoverinfo="skip", showlegend=False,
         ))
     fig.update_layout(
         map=dict(style="carto-darkmatter", zoom=13, center=center, uirevision=uirevision),
-        margin=dict(l=0, r=0, t=0, b=0), showlegend=False,
+        margin=dict(l=0, r=0, t=0, b=0),
+        showlegend=True,
+        legend=dict(
+            x=0.02, y=0.98, xanchor="left", yanchor="top",
+            bgcolor="rgba(0,0,0,0.55)", font=dict(color="white", size=10),
+            title=dict(text="Depth", font=dict(size=11, color="white")),
+        ),
     )
     return fig
 
@@ -233,6 +291,29 @@ BADGE_NO = {
     "display": "inline-block", "padding": "4px 14px", "border-radius": "12px",
     "background": "#1a9850", "color": "white", "font-weight": "bold",
 }
+DUPLICATE_WARNING_STYLE = {
+    "display": "inline-block", "padding": "4px 14px", "border-radius": "12px",
+    "background": "#fff3cd", "color": "#7a5b00", "font-weight": "bold",
+    "border": "1px solid #a50026", "margin-left": "14px",
+}
+
+
+def _duplicate_warning(row, df_all):
+    """Span describing a possible source-data duplicate flagged by
+    compute_bathym_stats.py (same survey location + date as another row,
+    which USACE's eHydro occasionally republishes under a second job ID),
+    or None if this survey wasn't flagged."""
+    dup_of = row.get("duplicate_of")
+    if pd.isna(dup_of) or not str(dup_of).strip():
+        return None
+    match_files = [f.strip() for f in str(dup_of).split(",") if f.strip()]
+    match_rows = df_all[df_all["file"].isin(match_files)]
+    parts = []
+    for _, m in match_rows.iterrows():
+        depth_str = f"{m['depth']:.1f}ft" if pd.notna(m["depth"]) else "n/a"
+        parts.append(f"{m['file']} (confirmed={m['confirmed']}, depth={depth_str})")
+    desc = "; ".join(parts) if parts else ", ".join(match_files)
+    return html.Span(f"⚠ Possible duplicate of: {desc}", style=DUPLICATE_WARNING_STYLE)
 
 initial_pending = get_pending_files()
 
@@ -351,6 +432,9 @@ def recompute(pending, index, percentile, threshold, flip_values, problem_point)
         html.Span(f"local depth range: {points_utm['depth_ft'].min():.1f}–{points_utm['depth_ft'].max():.1f} ft", style={"margin-right": "14px"}),
         html.Span(f"auto flag: {auto_flag}", style=badge_style),
     ]
+    dup_warning = _duplicate_warning(row, load_bathym_fixed())
+    if dup_warning is not None:
+        header_spans.append(dup_warning)
     if problem_point is not None:
         header_spans.append(html.Span(
             f"problem point set: {problem_point['lat']:.5f}, {problem_point['lon']:.5f}",

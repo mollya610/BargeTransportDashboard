@@ -51,11 +51,38 @@ def _build_shoaling_marker():
     Image.fromarray(arr).resize((64, 64), Image.LANCZOS).save("assets/shoaling_marker.png")
 
 
+def _build_at_risk_marker():
+    import fitz
+    import numpy as np
+    os.makedirs("assets", exist_ok=True)
+    doc = fitz.open("assets/Warning2.pdf")
+    pix = doc[0].get_pixmap(matrix=fitz.Matrix(4, 4), alpha=True)
+    src = Image.frombytes("RGBA", (pix.width, pix.height), pix.samples)
+    arr = np.array(src)
+    # find and crop to non-white content
+    non_white = np.any(arr[:, :, :3] < 240, axis=2)
+    rows = np.where(non_white.any(axis=1))[0]
+    cols = np.where(non_white.any(axis=0))[0]
+    src = src.crop((int(cols[0]), int(rows[0]), int(cols[-1]) + 1, int(rows[-1]) + 1))
+    arr = np.array(src)
+    # the crop is a square bounding box around the circle -- mask out the corner
+    # whitespace outside the circle itself, keeping its white interior opaque
+    h, w = arr.shape[:2]
+    yy, xx = np.mgrid[0:h, 0:w]
+    dist = np.sqrt((yy - h / 2) ** 2 + (xx - w / 2) ** 2)
+    alpha_mask = np.clip((min(h, w) / 2 - dist) / 2.0 + 0.5, 0, 1)
+    arr[:, :, 3] = (arr[:, :, 3].astype(float) * alpha_mask).astype(np.uint8)
+    Image.fromarray(arr).resize((64, 64), Image.LANCZOS).save("assets/at_risk_marker.png")
+
+
 if not os.path.exists("assets/dredge_marker.png"):
     _build_dredge_marker()
 
 if not os.path.exists("assets/shoaling_marker.png"):
     _build_shoaling_marker()
+
+if not os.path.exists("assets/at_risk_marker.png"):
+    _build_at_risk_marker()
 
 
 # LOAD DATA
@@ -105,6 +132,29 @@ DEPTH_POLY_FILES = {
     for f in _DEPTH_POLY_DIR.glob("*_depth_polygons.geojson")
 } if _DEPTH_POLY_DIR.exists() else set()
 
+# per-gage uncertainty (ft) for the "actual depth could vary ±X ft" note on a survey's
+# depth legend -- the anchor gages themselves (stlouis/memphis/greenville) are 0 by
+# definition, which isn't a useful error bound for a survey elsewhere on the river, so
+# use the nearest gage on the opposite side of the survey point from the anchor instead
+gage_uncertainty = pd.read_csv("update_bathym/gage_uncertainty.csv")
+
+
+def _uncertainty_for_mile(mile):
+    diffs = (gage_uncertainty["MileMarker"] - mile).abs()
+    nearest = gage_uncertainty.loc[diffs.idxmin()]
+    if nearest["uncertainty_ft"] > 0:
+        return float(nearest["uncertainty_ft"])
+    # nearest gage is an anchor (0 ft by definition) -- fall back to the nearest
+    # gage on the far side of the survey point from that anchor
+    if nearest["MileMarker"] > mile:
+        candidates = gage_uncertainty[gage_uncertainty["MileMarker"] < mile]
+    else:
+        candidates = gage_uncertainty[gage_uncertainty["MileMarker"] > mile]
+    if candidates.empty:
+        return float(nearest["uncertainty_ft"])
+    opp = candidates.loc[(candidates["MileMarker"] - mile).abs().idxmin()]
+    return float(opp["uncertainty_ft"])
+
 # get navigation notices (dredging/shoaling/draft restriction/other) from the manually
 # maintained notices_<year>.xlsx workbook(s) and locate them via mile markers or, for
 # dredging at a named location instead of a mile marker, a manually entered lat/lon
@@ -134,6 +184,9 @@ RIVER_GAGES = {
     "Memphis":   {"site": "MEMT1",    "source": "nws",  "lat": 35.123024, "lon": -90.077404},
     "Greenville":{"site": "GEEM6",    "source": "nws",  "lat": 33.2854,   "lon": -91.15632222},
 }
+
+# low-water reference threshold per gage (same anchors as the survey depth legend)
+GAGE_THRESHOLDS = {"St. Louis": -3, "Memphis": -10, "Greenville": 7}
 
 
 _stage_csv = Path("river_stage_history.csv")
@@ -457,20 +510,43 @@ GAGE_DETAIL_VISIBLE = {
 }
 SURVEY_LEGEND_HIDDEN = {"display": "none"}
 SURVEY_LEGEND_VISIBLE = {
-    "position": "absolute", "top": "15px", "right": "15px", "zIndex": "25",
-    "width": "200px", "background": "rgba(255,255,255,0.97)",
+    "width": "260px", "background": "rgba(255,255,255,0.97)",
     "padding": "14px 16px", "border-radius": "8px",
+    "box-shadow": "0 2px 10px rgba(0,0,0,0.4)",
+    "font-family": "Arial, sans-serif",
+}
+GAGE_FREQ_LINK_HIDDEN = {"display": "none"}
+GAGE_FREQ_LINK_VISIBLE = {
+    "border": "none", "background": "none", "cursor": "pointer", "padding": "0",
+    "color": "#1a237e", "text-decoration": "underline", "font-size": "12px",
+    "margin-top": "10px", "display": "block", "text-align": "left",
+}
+CURRENT_GAGE_HIDDEN = {"display": "none"}
+CURRENT_GAGE_VISIBLE = {
+    "width": "200px", "background": "rgba(255,255,255,0.97)",
+    "padding": "10px 14px", "border-radius": "8px",
     "box-shadow": "0 2px 10px rgba(0,0,0,0.4)",
     "font-family": "Arial, sans-serif",
 }
 SURVEY_BANNER_HIDDEN = {"display": "none"}
 SURVEY_BANNER_VISIBLE = {
-    "position": "absolute", "bottom": "30px", "left": "50%",
-    "transform": "translateX(-50%)",
-    "zIndex": "25", "background": "rgba(255,255,255,0.95)",
-    "padding": "8px 16px", "border-radius": "20px",
-    "box-shadow": "0 2px 8px rgba(0,0,0,0.35)",
-    "font-family": "Arial, sans-serif", "display": "flex", "align-items": "center",
+    "position": "relative", "width": "max-content", "max-width": "420px",
+    "background": "rgba(255,255,255,0.97)",
+    "padding": "10px 26px 10px 14px", "border-radius": "8px",
+    "box-shadow": "0 2px 10px rgba(0,0,0,0.4)",
+    "font-family": "Arial, sans-serif",
+}
+# gage-frequency panel — floats above the bottom of the map like the other detail
+# panels, stopping short of the survey legend column (260px legend + 15px margin
+# + a little breathing room)
+GAGE_FREQ_HIDDEN = {"display": "none"}
+GAGE_FREQ_VISIBLE = {
+    "position": "absolute", "bottom": "15px", "left": "15px", "right": "330px",
+    "zIndex": "24", "background": "rgba(255,255,255,0.97)",
+    "border-radius": "8px",
+    "box-shadow": "0 2px 10px rgba(0,0,0,0.4)",
+    "padding": "10px 40px 6px 14px",
+    "font-family": "Arial, sans-serif",
 }
 
 app.layout = html.Div(
@@ -501,6 +577,7 @@ app.layout = html.Div(
         dcc.Store(id="notice-detail-store", data=None),
         dcc.Store(id="selected-survey-store", data=None),
         dcc.Store(id="selected-gage-store", data=None),
+        dcc.Store(id="gage-freq-store", data=None),
 
         ##################################
         # Map fills the full width; controls and plots panel float on top of it
@@ -529,28 +606,58 @@ app.layout = html.Div(
                     ]
                 ),
 
-                # Survey depth overlay banner — appears when a survey dot is clicked
+                # Survey depth banner + legend — stacked top-right, banner directly
+                # above the legend so its close button (which dismisses both) reads
+                # as belonging to the pair instead of sitting far away from the legend
                 html.Div(
-                    id="survey-detail-banner",
-                    style={"display": "none"},
+                    style={
+                        "position": "absolute", "top": "15px", "right": "15px", "zIndex": "25",
+                        "display": "flex", "flex-direction": "column", "align-items": "flex-end",
+                        "gap": "10px",
+                    },
                     children=[
-                        html.Span(id="survey-detail-label", style={"font-size": "13px", "font-weight": "bold", "color": "#1a237e"}),
-                        html.Button(
-                            "✕ Close",
-                            id="survey-detail-close",
-                            style={
-                                "border": "none", "background": "none", "cursor": "pointer",
-                                "font-size": "12px", "color": "#888", "margin-left": "12px",
-                            }
+
+                        # Survey depth overlay banner — appears when a survey dot is clicked
+                        html.Div(
+                            id="survey-detail-banner",
+                            style={"display": "none"},
+                            children=[
+                                html.Button(
+                                    "✕",
+                                    id="survey-detail-close",
+                                    style={
+                                        "position": "absolute", "top": "6px", "right": "8px",
+                                        "border": "none", "background": "none", "cursor": "pointer",
+                                        "font-size": "14px", "font-weight": "bold", "color": "#333",
+                                        "line-height": "1", "padding": "2px",
+                                    }
+                                ),
+                                html.Div(id="survey-detail-label"),
+                            ]
+                        ),
+
+                        # Survey depth legend — appears below the banner when a survey map is shown.
+                        # gage-freq-link is a static, permanent component (not part of
+                        # survey-legend-content's dynamically-replaced children) -- Dash fires a
+                        # component's n_clicks-tracking callback on first mount, so recreating this
+                        # button fresh on every survey selection made it look "clicked" immediately
+                        html.Div(
+                            id="survey-legend-box",
+                            style={"display": "none"},
+                            children=[
+                                html.Div(id="survey-legend-content"),
+                                html.Button("", id="gage-freq-link", n_clicks=0, style={"display": "none"}),
+                            ]
+                        ),
+
+                        # Current gage reading — appears below the legend when a survey dot is
+                        # clicked, showing the most recent stage reading for whichever gage that
+                        # survey's depth legend is anchored to
+                        html.Div(
+                            id="current-gage-box",
+                            style={"display": "none"},
                         ),
                     ]
-                ),
-
-                # Survey depth legend — appears on the right when a survey map is shown
-                html.Div(
-                    id="survey-legend-box",
-                    style={"display": "none"},
-                    children=[html.Div(id="survey-legend-content")]
                 ),
 
                 # River stage detail panel — appears when a gage dot is clicked
@@ -569,8 +676,27 @@ app.layout = html.Div(
                         html.Div(id="gage-detail-content"),
                         dcc.Loading(
                             type="circle",
-                            children=dcc.Graph(id="gage-stage-plot", style={"height": "220px"}, config={"displayModeBar": False}),
+                            children=dcc.Graph(id="gage-stage-plot", style={"height": "260px"}, config={"displayModeBar": False}),
                         ),
+                    ]
+                ),
+
+                # Gage-frequency panel — appears across the bottom of the map when the
+                # "how often does the gage reach X ft?" link is clicked from a survey's
+                # depth legend
+                html.Div(
+                    id="gage-freq-panel",
+                    style=GAGE_FREQ_HIDDEN,
+                    children=[
+                        html.Button(
+                            "✕", id="gage-freq-close",
+                            style={
+                                "position": "absolute", "top": "8px", "right": "10px",
+                                "border": "none", "background": "none", "cursor": "pointer",
+                                "font-size": "16px", "color": "#888",
+                            }
+                        ),
+                        dcc.Graph(id="gage-freq-graph", style={"height": "240px"}, config={"displayModeBar": False}),
                     ]
                 ),
 
@@ -625,7 +751,7 @@ app.layout = html.Div(
                                                                 html.Span("Not at risk", style={"font-size": "12px", "vertical-align": "middle"}),
                                                             ]),
                                                             html.Div([
-                                                                html.Div(style={"width": "12px", "height": "12px", "border-radius": "50%", "background": RISK_BINS[1][1], "display": "inline-block", "margin-right": "4px", "vertical-align": "middle"}),
+                                                                html.Img(src="/assets/at_risk_marker.png", height="16", style={"display": "inline-block", "margin-right": "4px", "vertical-align": "middle"}),
                                                                 html.Span("At risk", style={"font-size": "12px", "vertical-align": "middle"}),
                                                             ]),
                                                         ]
@@ -755,9 +881,15 @@ def update_map(year, layers, selected_survey):
 
     fig = go.Figure()
     df_b = bathy[bathy['year']==year]
-    # hide the dot for whichever survey is currently showing its polygon overlay
+    # hide the dot for whichever survey is currently showing its polygon overlay, but if it's
+    # at risk, keep its marker up (faded) at the problem point so it's not lost under the polygon
+    selected_at_risk_row = None
     if selected_survey:
-        df_b = df_b[df_b["survey_id"] != selected_survey.get("survey_id")]
+        sid = selected_survey.get("survey_id")
+        df_b = df_b[df_b["survey_id"] != sid]
+        match = bathy[(bathy["survey_id"] == sid) & (bathy["at_risk_eff"] == "yes")]
+        if not match.empty:
+            selected_at_risk_row = match.iloc[0]
     df_n = notices[notices['year']==year]
     # plot river
     fig.add_trace(
@@ -851,6 +983,8 @@ def update_map(year, layers, selected_survey):
             )
             shown_legend[status] = True
 
+    icon_layers = []
+
     #  bathym layer - 2 risk bins (at_risk yes/no), each its own trace so color/legend are discrete.
     # drawn here (before dredging/shoaling/other) so it sits behind them on the map, but
     # legendrank pushes it below them in the legend regardless of draw order
@@ -865,19 +999,31 @@ def update_map(year, layers, selected_survey):
                 continue
             df_bin["date_fmt"] = pd.to_datetime(df_bin["date"]).dt.strftime("%B %-d, %Y")
             df_bin["click_hint"] = df_bin["survey_id"].apply(
-                lambda sid: "<i>Click for depth survey map</i>" if sid in DEPTH_POLY_FILES else ""
+                lambda sid: "<i>Click for depth map and details</i>" if sid in DEPTH_POLY_FILES else ""
             )
-            df_bin["gage_label"] = df_bin["milemarker"].apply(
-                lambda m: "St. Louis gage is at -3ft" if m >= 951 else "Memphis gage is at -10ft"
-            )
-            custom = df_bin[["date_fmt", "depth", "survey_id", "click_hint", "gage_label"]].copy()
+            # thresholds south of the Arkansas River confluence (~mile 580) are anchored
+            # to Greenville = 7ft instead of Memphis -- see threshold calculation/
+            # calculate_lowwater_thresh_datums.py's GREENVILLE_TARGET/CONFLUENCE_MILE
+            def _gage_info(m):
+                if m >= 951:
+                    return "St. Louis", -3, "St. Louis gage is at -3ft"
+                if m >= 580:
+                    return "Memphis", -10, "Memphis gage is at -10ft"
+                return "Greenville", 7, "Greenville gage is at 7ft"
+            gage_info = df_bin["milemarker"].apply(_gage_info)
+            df_bin["gage_name"] = gage_info.apply(lambda t: t[0])
+            df_bin["gage_value"] = gage_info.apply(lambda t: t[1])
+            df_bin["gage_label"] = gage_info.apply(lambda t: t[2])
+            df_bin["gage_uncertainty"] = df_bin["milemarker"].apply(_uncertainty_for_mile)
+            custom = df_bin[["date_fmt", "depth", "survey_id", "click_hint", "gage_label", "gage_name", "gage_value", "gage_uncertainty"]].copy()
             custom.insert(0, "_type", "bathy")
+            is_at_risk = label == "At Risk"
             fig.add_trace(
                 go.Scattermap(
                     lon=df_bin["LON"],
                     lat=df_bin["LAT"],
                     mode="markers",
-                    marker=dict(size=size, color=color, opacity=1.0),
+                    marker=dict(size=size, color=color, opacity=0.0 if is_at_risk else 1.0),
                     showlegend=True,
                     legendgroup="depth_survey",
                     legendgrouptitle_text="Survey Locations:<br>Navigation Risk under Low Water",
@@ -887,17 +1033,46 @@ def update_map(year, layers, selected_survey):
                     hovertemplate=(
                         "<b><span style='font-size:16px'>Riverbed Survey</span></b><br>"
                         "<span style='font-size:14px'>%{customdata[1]}</span><br>"
-                        "<span style='font-size:15px'>Average depth when %{customdata[5]}: <b>%{customdata[2]:.1f} ft</b></span><br>"
                         "%{customdata[4]}<extra></extra>"
                     )
                 )
             )
+            if is_at_risk:
+                icon_layers.append({
+                    "sourcetype": "geojson",
+                    "source": {
+                        "type": "FeatureCollection",
+                        "features": [
+                            {"type": "Feature",
+                             "geometry": {"type": "Point", "coordinates": [row["LON"], row["LAT"]]}}
+                            for _, row in df_bin.iterrows()
+                        ],
+                    },
+                    "type": "symbol",
+                    "symbol": {"icon": "at-risk-icon", "iconsize": 2.5},
+                })
+
+    if selected_at_risk_row is not None:
+        icon_layers.append({
+            "sourcetype": "geojson",
+            "source": {
+                "type": "FeatureCollection",
+                "features": [{
+                    "type": "Feature",
+                    "geometry": {
+                        "type": "Point",
+                        "coordinates": [selected_at_risk_row["LON"], selected_at_risk_row["LAT"]],
+                    },
+                }],
+            },
+            "type": "symbol",
+            "symbol": {"icon": "at-risk-icon-selected", "iconsize": 2.5},
+        })
 
     # dredging/shoaling markers - one trace per category so each can be toggled and colored
     # on its own (draft restriction is drawn separately above, behind the bathymetry layer).
     # both stay on the map for the year they were reported, regardless of active status -
     # dredging's hover just relabels itself planned/in progress/completed based on its dates.
-    icon_layers = []
     for category in ("dredging", "shoaling"):
         if category not in layers:
             continue
@@ -1180,8 +1355,13 @@ def handle_survey_click(click_data, n_close, current):
     if current and current.get("survey_id") == survey_id:
         return None
     date_str = customdata[1]
-    gage_label = customdata[5] if len(customdata) > 5 else "Memphis gage is at -10ft"
-    return {"survey_id": survey_id, "date": date_str, "gage_label": gage_label}
+    gage_name = customdata[6] if len(customdata) > 6 else "Memphis"
+    gage_value = customdata[7] if len(customdata) > 7 else -10
+    gage_uncertainty = customdata[8] if len(customdata) > 8 else 0.0
+    return {
+        "survey_id": survey_id, "date": date_str,
+        "gage_name": gage_name, "gage_value": gage_value, "gage_uncertainty": gage_uncertainty,
+    }
 
 
 @app.callback(
@@ -1192,20 +1372,84 @@ def handle_survey_click(click_data, n_close, current):
 def render_survey_banner(data):
     if not data:
         return SURVEY_BANNER_HIDDEN, ""
-    label = f"Depth survey: {data['survey_id']}  ·  {data['date']}"
+    label = html.Div([
+        html.Div(
+            "U.S Army Corps of Engineers Hydrographic Survey:",
+            style={"font-size": "12px", "color": "#666", "line-height": "1.3", "white-space": "nowrap"},
+        ),
+        html.Div(
+            data["survey_id"],
+            style={"font-size": "14px", "font-weight": "bold", "color": "#1a237e", "margin-top": "2px", "white-space": "nowrap"},
+        ),
+        html.Div(
+            data["date"],
+            style={"font-size": "12px", "color": "#888", "margin-top": "2px", "white-space": "nowrap"},
+        ),
+    ])
     return SURVEY_BANNER_VISIBLE, label
+
+
+@app.callback(
+    Output("current-gage-box", "style"),
+    Output("current-gage-box", "children"),
+    Input("selected-survey-store", "data"),
+)
+def render_current_gage(data):
+    if not data:
+        return CURRENT_GAGE_HIDDEN, []
+    gage_name = data.get("gage_name", "Memphis")
+    latest = river_stage_df[river_stage_df["gage"] == gage_name].sort_values("date")
+    if latest.empty:
+        return CURRENT_GAGE_HIDDEN, []
+    latest_row = latest.iloc[-1]
+    content = [
+        html.Div(
+            f"{gage_name} gage is currently at",
+            style={"font-size": "12px", "color": "#444", "line-height": "1.3"},
+        ),
+        html.Div(
+            f"{latest_row['stage']:.1f} ft",
+            style={"font-size": "22px", "font-weight": "bold", "color": "#1a237e", "margin-top": "2px"},
+        ),
+        html.Div(
+            f"as of {latest_row['date'].strftime('%B %-d, %Y')}",
+            style={"font-size": "10px", "color": "#888", "margin-top": "2px"},
+        ),
+    ]
+    return CURRENT_GAGE_VISIBLE, content
 
 
 @app.callback(
     Output("survey-legend-box", "style"),
     Output("survey-legend-content", "children"),
+    Output("gage-freq-link", "children"),
+    Output("gage-freq-link", "style"),
     Input("selected-survey-store", "data"),
 )
 def render_survey_legend(data):
     if not data:
-        return SURVEY_LEGEND_HIDDEN, []
-    gage_label = data.get("gage_label", "Memphis gage is at -10ft")
-    title = f"Depth when {gage_label}"
+        return SURVEY_LEGEND_HIDDEN, [], "", GAGE_FREQ_LINK_HIDDEN
+    gage_name = data.get("gage_name", "Memphis")
+    gage_value = data.get("gage_value", -10)
+    gage_uncertainty = data.get("gage_uncertainty", 0.0)
+    title = html.Div([
+        html.Div(
+            "River Depth When",
+            style={"font-size": "16px", "font-weight": "normal", "line-height": "1.3", "text-transform": "uppercase"},
+        ),
+        html.Div(
+            [
+                html.Span(gage_name, style={"font-weight": "bold"}),
+                " Gage is at ",
+                html.Span(f"{int(gage_value)} ft", style={"font-weight": "bold"}),
+            ],
+            style={"font-size": "16px", "font-weight": "normal", "line-height": "1.3", "text-transform": "uppercase"},
+        ),
+        html.Div(
+            f"Depth estimate accurate to ±{gage_uncertainty:g} ft",
+            style={"font-size": "11px", "font-style": "italic", "color": "#666", "margin-top": "4px"},
+        ),
+    ], style={"margin-bottom": "10px"})
     rows = [
         html.Div(
             style={"display": "flex", "align-items": "center", "margin-bottom": "5px"},
@@ -1219,10 +1463,91 @@ def render_survey_legend(data):
         )
         for bin_label, color in DEPTH_POLY_COLORS.items()
     ]
-    content = [
-        html.Div(title, style={"font-size": "18px", "font-weight": "bold", "margin-bottom": "10px", "line-height": "1.3"}),
-    ] + rows
-    return SURVEY_LEGEND_VISIBLE, content
+    n_rows = len(rows) // 2 + len(rows) % 2
+    rows_grid = html.Div(
+        rows,
+        style={
+            "display": "grid", "grid-template-columns": "1fr 1fr",
+            "grid-template-rows": f"repeat({n_rows}, auto)", "grid-auto-flow": "column",
+            "column-gap": "6px",
+        },
+    )
+    link_text = f"How often does the {gage_name} gage reach {int(gage_value)}ft?"
+    content = [title, rows_grid]
+    return SURVEY_LEGEND_VISIBLE, content, link_text, GAGE_FREQ_LINK_VISIBLE
+
+
+@app.callback(
+    Output("gage-freq-store", "data"),
+    Input("gage-freq-link", "n_clicks"),
+    Input("gage-freq-close", "n_clicks"),
+    Input("selected-survey-store", "data"),
+    prevent_initial_call=True,
+)
+def toggle_gage_freq(n_open, n_close, survey_data):
+    # closing the panel directly, or changing/closing the survey it belongs to,
+    # both dismiss it -- otherwise it could linger showing a stale gage after the
+    # underlying survey selection has moved on
+    if dash.ctx.triggered_id in ("gage-freq-close", "selected-survey-store"):
+        return None
+    if not survey_data:
+        return dash.no_update
+    return {
+        "gage_name": survey_data.get("gage_name", "Memphis"),
+        "gage_value": survey_data.get("gage_value", -10),
+    }
+
+
+@app.callback(
+    Output("gage-freq-panel", "style"),
+    Output("gage-freq-graph", "figure"),
+    Input("gage-freq-store", "data"),
+)
+def render_gage_freq(data):
+    empty_fig = go.Figure()
+    empty_fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", margin=dict(l=0, r=0, t=0, b=0))
+    if not data:
+        return GAGE_FREQ_HIDDEN, empty_fig
+
+    gage_name = data["gage_name"]
+    gage_value = data["gage_value"]
+    cutoff = pd.Timestamp.today().normalize() - pd.DateOffset(years=5)
+    df = river_stage_df[
+        (river_stage_df["gage"] == gage_name) & (river_stage_df["date"] >= cutoff)
+    ][["date", "stage"]].sort_values("date").reset_index(drop=True)
+
+    below = df[df["stage"] <= gage_value]
+
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=df["date"], y=df["stage"], mode="lines", name="Stage",
+        line=dict(color="#1565c0", width=1),
+        hovertemplate="%{x|%B %d, %Y}<br>%{y:.1f} ft<extra></extra>",
+    ))
+    fig.add_trace(go.Scatter(
+        x=below["date"], y=below["stage"], mode="markers",
+        name=f"At/below {int(gage_value)} ft",
+        marker=dict(color="#e53935", size=5),
+        hovertemplate="%{x|%B %d, %Y}<br>%{y:.1f} ft<extra></extra>",
+    ))
+    fig.add_hline(y=gage_value, line=dict(color="#e53935", width=1, dash="dot"))
+    # light grey dotted line at Jan 1 of each year in range, so a multi-year span is
+    # easier to read at a glance
+    for year in range(cutoff.year, pd.Timestamp.today().year + 1):
+        fig.add_vline(x=pd.Timestamp(year=year, month=1, day=1), line=dict(color="#bbb", width=1, dash="dot"))
+    fig.update_layout(
+        margin=dict(l=55, r=15, t=15, b=25),
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(245,248,255,1)",
+        showlegend=False,
+        xaxis=dict(showgrid=False, tickfont=dict(size=10)),
+        yaxis=dict(
+            title=f"{gage_name} River Stage (ft)", gridcolor="#ddd",
+            tickfont=dict(size=13), title_font=dict(size=14),
+        ),
+        hovermode="closest",
+    )
+    return GAGE_FREQ_VISIBLE, fig
 
 
 @app.callback(
@@ -1274,10 +1599,6 @@ def render_gage_panel(data):
     df = df.merge(clim.drop(columns="gage"), on="day_of_year", how="left")
 
     current_stage = df["stage"].iloc[-1]
-    current_avg   = df["avg_stage"].iloc[-1]
-    diff          = current_stage - current_avg
-    diff_str      = f"+{diff:.2f}" if diff >= 0 else f"{diff:.2f}"
-    diff_color    = "#c62828" if diff > 1 else ("#2e7d32" if diff < -1 else "#555")
 
     # NWS gages (Memphis, Greenville) report hourly -- the daily pipeline runs at
     # 7am CT, so "today"'s row is a partial early-morning reading until tomorrow's
@@ -1287,20 +1608,48 @@ def render_gage_panel(data):
     is_nws = RIVER_GAGES.get(gage_name, {}).get("source") == "nws"
     today_note = " (as of ~7am CT)" if (is_today and is_nws) else ""
 
+    # custom HTML legend, above the plot -- Plotly's own built-in legend has a rendering
+    # quirk here where the visual order doesn't reliably follow trace order, legendrank,
+    # or yanchor (tried all three independently; render stayed fixed regardless), so
+    # showlegend is off on the figure and this replaces it with full control over order
+    def _legend_row(swatch_style, label):
+        return html.Div([
+            html.Span(style={"display": "inline-block", "width": "18px", "margin-right": "6px", "vertical-align": "middle", **swatch_style}),
+            html.Span(label, style={"font-size": "9px", "vertical-align": "middle"}),
+        ], style={"margin-bottom": "3px"})
+
+    legend_rows = html.Div([
+        _legend_row({"height": "3px", "background": "#1565c0"}, "DAILY STAGE"),
+        _legend_row({"height": "0", "border-top": "2px dashed #90caf9"}, "HISTORICAL AVERAGE (2000-2025)"),
+        _legend_row({"height": "10px", "background": "rgba(144,202,249,0.3)", "border-radius": "2px"}, "HISTORICAL 25-75TH PERCENTILE"),
+    ], style={"margin-bottom": "8px"})
+
     content = [
         html.Div(gage_name, style={"font-size": "18px", "font-weight": "bold", "margin-bottom": "4px"}),
         html.Div([
             html.Span("Current stage: ", style={"font-size": "13px", "color": "#444"}),
-            html.Span(f"{current_stage:.2f} ft", style={"font-size": "16px", "font-weight": "bold"}),
+            html.Span(f"{current_stage:.1f} ft", style={"font-size": "16px", "font-weight": "bold"}),
             html.Span(today_note, style={"font-size": "11px", "color": "#888"}),
-        ], style={"margin-bottom": "2px"}),
-        html.Div([
-            html.Span("vs historical avg for this week: ", style={"font-size": "13px", "color": "#444"}),
-            html.Span(diff_str + " ft", style={"font-size": "13px", "font-weight": "bold", "color": diff_color}),
         ], style={"margin-bottom": "10px"}),
+        legend_rows,
     ]
 
+    # trace add-order drives legend order (daily stage first) -- the percentile band's
+    # fill="tonexty" only needs its two traces (p75/p25) adjacent to each other, so the
+    # pair can move to the end without breaking the fill
     fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=df["date"], y=df["stage"],
+        mode="lines", name="DAILY STAGE",
+        line=dict(color="#1565c0", width=2),
+        hovertemplate="%{y:.1f} ft<extra>Daily stage</extra>",
+    ))
+    fig.add_trace(go.Scatter(
+        x=df["date"], y=df["avg_stage"],
+        mode="lines", name="HISTORICAL AVERAGE (2000-2025)",
+        line=dict(color="#90caf9", width=2, dash="dash"),
+        hovertemplate="%{y:.1f} ft<extra>Historical avg</extra>",
+    ))
     fig.add_trace(go.Scatter(
         x=df["date"], y=df["p75_stage"],
         mode="lines", line=dict(width=0),
@@ -1310,32 +1659,29 @@ def render_gage_panel(data):
         x=df["date"], y=df["p25_stage"],
         mode="lines", line=dict(width=0),
         fill="tonexty", fillcolor="rgba(144,202,249,0.3)",
-        name="Historical 25th-75th pctile", hoverinfo="skip",
-    ))
-    fig.add_trace(go.Scatter(
-        x=df["date"], y=df["avg_stage"],
-        mode="lines", name="Historical avg (2000-2025)",
-        line=dict(color="#90caf9", width=2, dash="dash"),
-    ))
-    fig.add_trace(go.Scatter(
-        x=df["date"], y=df["stage"],
-        mode="lines", name="Daily stage",
-        line=dict(color="#1565c0", width=2),
+        name="HISTORICAL 25-75TH PERCENTILE", hoverinfo="skip",
     ))
     fig.add_trace(go.Scatter(
         x=[df["date"].iloc[-1]], y=[current_stage],
         mode="markers", name="Today",
         marker=dict(color="#1565c0", size=8),
-        showlegend=False,
+        showlegend=False, hoverinfo="skip",
     ))
+    # extend the y-axis down to the gage's low-water threshold (no extra padding -- goes
+    # exactly to the critical mark) and at least 10ft above the highest value so the top
+    # isn't cramped the way a small proportional pad left it
+    threshold = GAGE_THRESHOLDS.get(gage_name, 0)
+    y_max = max(df["stage"].max(), df["p75_stage"].max())
+    y_range = [threshold, y_max + 10]
     fig.update_layout(
         margin=dict(l=40, r=10, t=10, b=30),
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(245,248,255,1)",
-        legend=dict(orientation="h", yanchor="bottom", y=1.0, xanchor="left", x=0, font=dict(size=11)),
+        showlegend=False,
         xaxis=dict(showgrid=False, tickfont=dict(size=10)),
-        yaxis=dict(title="Stage (ft)", gridcolor="#ddd", tickfont=dict(size=10), title_font=dict(size=11)),
+        yaxis=dict(title="Stage (ft)", range=y_range, gridcolor="#ddd", tickfont=dict(size=10), title_font=dict(size=15)),
         hovermode="x unified",
+        hoverlabel=dict(bgcolor="white", bordercolor="#888", font=dict(color="#222", size=11)),
     )
     return GAGE_DETAIL_VISIBLE, content, fig
 
