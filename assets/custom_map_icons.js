@@ -6,7 +6,13 @@ window.addEventListener('load', function () {
         { id: 'dredge-icon-15',   src: '/assets/dredge_marker.png' },
         { id: 'shoaling-icon-15', src: '/assets/shoaling_marker.png' },
         { id: 'gage-icon-15',     src: '/assets/raindrop.png' },
+        { id: 'at-risk-icon-15', src: '/assets/at_risk_marker.png' },
+        // same PNG, registered under a second key so this layer's icon-opacity
+        // can be faded independently of the regular at-risk-icon layer -
+        // used for the selected survey's marker while its depth polygons are showing
+        { id: 'at-risk-icon-selected-15', src: '/assets/at_risk_marker.png' },
     ];
+    var SELECTED_AT_RISK_OPACITY = 0.45;
     var iconListenerAdded = false;
 
     function addIcons(map) {
@@ -41,6 +47,9 @@ window.addEventListener('load', function () {
             try {
                 map.setLayoutProperty(layer.id, 'icon-allow-overlap', true);
                 map.setLayoutProperty(layer.id, 'icon-ignore-placement', true);
+                if (iconImage === 'at-risk-icon-selected-15') {
+                    map.setPaintProperty(layer.id, 'icon-opacity', SELECTED_AT_RISK_OPACITY);
+                }
             } catch (e) { /* layer mid-transition; next afterplot pass will retry */ }
         });
     }
