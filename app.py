@@ -97,7 +97,7 @@ bathy["date_dt"] = pd.to_datetime(bathy["date"]).dt.tz_localize(None)
 years = sorted(bathy["year"].unique())
 years = [int(y) for y in years]
 
-bathy["at_risk_eff"] = bathy["at_risk"].fillna("no") if "at_risk" in bathy.columns else "no"
+bathy["at_risk_eff"] = bathy["at_risk"].fillna("low") if "at_risk" in bathy.columns else "low"
 
 # get center point for bathym measures
 bathy["geometry"] = bathy["geometry"].apply(wkt.loads)
@@ -115,7 +115,7 @@ bathy = pd.DataFrame(bathy.drop(columns=["geometry", "rep_point"]))
 if "problem_lon" in bathy.columns and "problem_lat" in bathy.columns:
     problem_lon = pd.to_numeric(bathy["problem_lon"], errors="coerce")
     problem_lat = pd.to_numeric(bathy["problem_lat"], errors="coerce")
-    has_problem_point = (bathy["at_risk_eff"] == "yes") & problem_lon.notna() & problem_lat.notna()
+    has_problem_point = bathy["at_risk_eff"].isin(["medium", "high"]) & problem_lon.notna() & problem_lat.notna()
     bathy.loc[has_problem_point, "LON"] = problem_lon[has_problem_point]
     bathy.loc[has_problem_point, "LAT"] = problem_lat[has_problem_point]
 bathy["survey_id"] = (
@@ -165,12 +165,14 @@ DRAFT_ANNOUNCED_OPACITY = 0.45
 DRAFT_IN_PLACE_OPACITY = 0.85
 BIG, MED, SMALL = "18px", "14px", "11px"
 
-# bathymetry survey points are colored by the review app's at_risk flag, not a depth
-# threshold -- red if flagged at risk, green otherwise (including legacy rows from
-# before at_risk existed, which default to "not at risk")
+# bathymetry survey points are colored by the review app's at_risk flag (low/medium/high),
+# not a depth threshold. Low and Medium render as plain colored dots; High gets the same
+# custom warning-icon treatment as the old binary "At Risk" tier (see icon_layers below).
+# Legacy/blank rows (from before at_risk existed) default to "low".
 RISK_BINS = [
-    ("Not At Risk", "#2e7d32", 9),
-    ("At Risk", "#e53935", 16),
+    ("Low Risk", "#2e7d32", 9),
+    ("Medium Risk", "#fb8c00", 12),
+    ("High Risk", "#e53935", 16),
 ]
 
 # the workbook uses short river codes rather than the full names in the mile-marker table
@@ -323,6 +325,96 @@ except Exception as e:
     print(f"Warning: could not load corn/soy price data ({e}). Price charts will be empty.")
     corn_price = pd.DataFrame(columns=['date','week_no','year','gulf_corn_price','month','avg_price','std_price','plusone','minusone'])
     soy_price = pd.DataFrame(columns=['date','week_no','year','gulf_soy_price','month','avg_price','std_price','plusone','minusone'])
+
+# Barge Demand indicator: current-year WASDE production estimate (fetch_wasde.py)
+try:
+    wasde_latest = pd.read_csv("wasde_production_estimate.csv").iloc[0].to_dict()
+except Exception as e:
+    print(f"Warning: could not load WASDE production estimate ({e}). Barge Demand production chart will skip the current-year bar.")
+    wasde_latest = None
+
+# Barge Demand indicator: ~10yr history of final US corn/soybean production (fetch_grain_production.py, NASS QuickStats)
+try:
+    grain_production_history = pd.read_csv("grain_production_history.csv")
+except Exception as e:
+    print(f"Warning: could not load grain production history ({e}). Barge Demand production chart will show only the current-year estimate.")
+    grain_production_history = pd.DataFrame(columns=['year', 'corn_production_million_bu', 'soybean_production_million_bu'])
+
+# Year-comparison scatterplot only: pre-2016 production (harvest_wasde2.xlsx, a WASDE-report
+# vintage, manually compiled back to 2008) so the scatterplot can go back further than the
+# NASS final-production history above. Only used to fill years grain_production_history doesn't
+# have -- NASS final figures run ~2% off WASDE report estimates (different vintage/methodology),
+# so where both exist the NASS figure above wins rather than silently blending the two.
+try:
+    wasde_production_backfill = pd.read_excel("harvest_wasde2.xlsx").rename(
+        columns={"corn_prod": "corn_production_million_bu", "soy_prod": "soybean_production_million_bu"}
+    )[["year", "corn_production_million_bu", "soybean_production_million_bu"]]
+except Exception as e:
+    print(f"Warning: could not load WASDE production backfill ({e}). Year-comparison scatterplot will start in {grain_production_history['year'].min() if not grain_production_history.empty else thisyear}.")
+    wasde_production_backfill = pd.DataFrame(columns=['year', 'corn_production_million_bu', 'soybean_production_million_bu'])
+
+# Barge Demand indicator: Dec-corn / Nov-soy new-crop futures history (fetch_market_data.py).
+# Compared day-by-day against a trailing 5-year average for that same day of year, same
+# pattern as barge_rate_plot/cornprice_plot/soyprice_plot in the Plots panel. The average
+# is built against a full-year date skeleton (not just this year's dates so far) so it
+# draws all the way to December even while the current-year line stops at today, and is
+# smoothed with a 7-day rolling mean since a raw day-of-year average across only 5 years
+# of samples is too choppy to read.
+try:
+    futures_hist = pd.read_csv("futures_dec_nov_history.csv", parse_dates=["date"])
+    futures_hist['doy'] = futures_hist['date'].dt.dayofyear
+    futures_hist['year'] = futures_hist['date'].dt.year
+
+    # Once a contract expires, the report starts basing quotes off *next* year's Dec/Nov
+    # contract instead of leaving the field blank -- so the raw price jumps to a different
+    # contract's level rather than just stopping. Cut off before that happens (Dec contract
+    # data stops at the end of November, Nov contract data stops at the end of October) so
+    # neither the current-year line nor the historical average keeps going past that point
+    # using what is actually a different year's contract.
+    month_day = futures_hist['date'].dt.strftime('%m-%d')
+    futures_hist.loc[month_day > '11-30', 'corn_dec_futures'] = pd.NA
+    futures_hist.loc[month_day > '10-31', 'soy_nov_futures'] = pd.NA
+
+    trailing_5yr = futures_hist[(futures_hist['year'] < thisyear) & (futures_hist['year'] >= thisyear - 5)]
+    mean_by_doy = trailing_5yr.groupby('doy')[['corn_dec_futures', 'soy_nov_futures']].mean() \
+        .rename(columns={'corn_dec_futures': 'corn_dec_avg', 'soy_nov_futures': 'soy_nov_avg'}) \
+        .sort_index()
+
+    # Smooth only over the real (pre-cutoff) portion of each series, then stop -- smoothing
+    # across the cutoff boundary would blend in the empty tail and taper the line off instead
+    # of ending it cleanly.
+    corn_cutoff_doy = pd.Timestamp(f'{thisyear}-11-30').dayofyear
+    soy_cutoff_doy = pd.Timestamp(f'{thisyear}-10-31').dayofyear
+    mean_by_doy = pd.DataFrame({
+        'corn_dec_avg': mean_by_doy.loc[mean_by_doy.index <= corn_cutoff_doy, 'corn_dec_avg']
+            .rolling(7, center=True, min_periods=1).mean(),
+        'soy_nov_avg': mean_by_doy.loc[mean_by_doy.index <= soy_cutoff_doy, 'soy_nov_avg']
+            .rolling(7, center=True, min_periods=1).mean(),
+    })
+
+    full_year_skeleton = pd.DataFrame({'date': pd.date_range(f'{thisyear}-01-01', f'{thisyear}-12-31', freq='D')})
+    full_year_skeleton['doy'] = full_year_skeleton['date'].dt.dayofyear
+
+    this_year_futures = futures_hist[futures_hist['year'] == thisyear][['date', 'corn_dec_futures', 'soy_nov_futures']]
+    futures_weekly = full_year_skeleton.merge(this_year_futures, on='date', how='left').merge(mean_by_doy, on='doy', how='left')
+except Exception as e:
+    print(f"Warning: could not load Dec/Nov futures history ({e}). Barge Demand futures chart will be empty.")
+    futures_weekly = pd.DataFrame(columns=['date', 'week_no', 'corn_dec_futures', 'soy_nov_futures', 'corn_dec_avg', 'soy_nov_avg'])
+
+# Barge Demand indicator: which years counted as "low water" years, for the
+# year-comparison scatterplot. A year qualifies if any gage's stage dropped to/below
+# that gage's existing low-water threshold (GAGE_THRESHOLDS, same anchors used for the
+# survey-risk map coloring) at any point that year. A handful of single-day 0.0 readings
+# scattered across gages/years are sensor gaps, not real zero-stage events (surrounding
+# days are all 20-40ft higher) -- dropped before taking the yearly min so they can't
+# falsely flag a year as low-water.
+_stage_for_low_water = river_stage_df[river_stage_df['stage'] != 0.0].copy()
+_stage_for_low_water['year'] = _stage_for_low_water['date'].dt.year
+_yearly_min_stage = _stage_for_low_water.groupby(['gage', 'year'])['stage'].min().reset_index()
+_yearly_min_stage['threshold'] = _yearly_min_stage['gage'].map(GAGE_THRESHOLDS)
+LOW_WATER_YEARS = set(
+    _yearly_min_stage.loc[_yearly_min_stage['stage'] <= _yearly_min_stage['threshold'], 'year'].tolist()
+)
 
 
 # now get river lines — filter to just the rivers we need at read time so the full
@@ -548,6 +640,353 @@ GAGE_FREQ_VISIBLE = {
     "padding": "10px 40px 6px 14px",
     "font-family": "Arial, sans-serif",
 }
+# Top-level pages -- clicking a header nav link switches which one is visible.
+# "River Conditions" (the map) is the default; "Barge Demand" is a full page, not
+# an overlay, so it gets the same amount of room as the map does.
+RIVER_PAGE_VISIBLE = {"display": "block"}
+RIVER_PAGE_HIDDEN = {"display": "none"}
+DEMAND_PAGE_VISIBLE = {"display": "block", "background": "white", "min-height": "92vh", "padding": "28px 40px"}
+DEMAND_PAGE_HIDDEN = {"display": "none"}
+
+COMPARE_YEARS_TOGGLE_STYLE = {
+    "background": "#2166ac", "color": "white", "border": "none",
+    "border-radius": "6px", "padding": "10px 20px", "font-size": "15px",
+    "cursor": "pointer", "margin-top": "10px",
+}
+COMPARE_YEARS_BOX_HIDDEN = {"display": "none"}
+COMPARE_YEARS_BOX_VISIBLE = {
+    "display": "block", "position": "fixed", "top": "50%", "left": "50%",
+    "transform": "translate(-50%, -50%)", "zIndex": "1000",
+    "border": "1px solid #b8d4ec", "border-radius": "8px",
+    "padding": "20px 24px", "background": "#f7fbfe",
+    "box-shadow": "0 4px 24px rgba(0,0,0,0.35)",
+    "max-height": "90vh", "overflow-y": "auto",
+}
+
+NAV_LINK_BASE = {
+    "background": "none", "border": "none", "cursor": "pointer",
+    "font-size": "15px", "padding": "6px 2px", "margin-left": "24px",
+}
+NAV_LINK_ACTIVE = {**NAV_LINK_BASE, "color": "white", "font-weight": "bold", "border-bottom": "2px solid white"}
+NAV_LINK_INACTIVE = {**NAV_LINK_BASE, "color": "rgba(255,255,255,0.65)", "font-weight": "normal", "border-bottom": "2px solid transparent"}
+
+SECTION_HEADER_STYLE = {"margin": "0 0 4px 0", "font-size": "22px", "color": "#1b3a5c"}
+SECTION_SUBTEXT_STYLE = {"margin": "0 0 10px 0", "font-size": "17px", "color": "#555"}
+CAPTION_STYLE = {"margin-top": "0px", "font-size": "14px", "color": "#777", "font-style": "italic"}
+
+CROP_COLORS = {"corn": "#006837", "soybean": "#f1a340"}
+
+
+def build_production_chart(crop):
+    col = f"{crop}_production_million_bu"
+    label = "Corn" if crop == "corn" else "Soybean"
+    color = CROP_COLORS[crop]
+
+    hist = grain_production_history[["year", col]].dropna().sort_values("year") if col in grain_production_history else pd.DataFrame(columns=["year", col])
+    years = hist["year"].tolist()
+    values = hist[col].tolist()
+    bar_colors = [color] * len(years)
+
+    caption = ""
+    if wasde_latest is not None:
+        current_year = int(str(wasde_latest["marketing_year"]).split("/")[0])
+        current_value = wasde_latest[col]
+        years = years + [current_year]
+        values = values + [current_value]
+        bar_colors = bar_colors + ["#d95f0e"]
+        caption = f"The {current_year} estimate is from the {wasde_latest['report_label']} WASDE report."
+
+    fig = go.Figure()
+    fig.add_trace(go.Bar(x=years, y=values, marker_color=bar_colors, showlegend=False))
+    fig.update_layout(
+        title=f"US <b>{label}</b> Production",
+        yaxis_title="Million bushels",
+        xaxis=dict(type="category"),
+        height=300,
+        margin=dict(l=50, r=20, t=40, b=25),
+    )
+    return fig, caption
+
+
+def build_futures_chart(crop):
+    if crop == "corn":
+        prefix, month_label, crop_label, color = "corn_dec", "December", "Corn", CROP_COLORS["corn"]
+    else:
+        prefix, month_label, crop_label, color = "soy_nov", "November", "Soybean", CROP_COLORS["soybean"]
+
+    value_col = f"{prefix}_futures"
+    avg_col = f"{prefix}_avg"
+    df = futures_weekly[["date", value_col, avg_col]] if value_col in futures_weekly else pd.DataFrame(columns=["date", value_col, avg_col])
+
+    # extra headroom above the highest line so the top-left legend box doesn't sit on top of it
+    combined = pd.concat([df[value_col], df[avg_col]]).dropna()
+    if not combined.empty:
+        y_min, y_max = combined.min(), combined.max()
+        pad = (y_max - y_min) * 0.15 or 0.5
+        yaxis_range = [y_min - pad, y_max + pad * 3]
+    else:
+        yaxis_range = None
+
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=df["date"], y=df[value_col],
+        mode="lines+markers", line=dict(width=2, color=color), marker=dict(size=4), name=str(thisyear),
+        hovertemplate="$%{y:.2f}<extra></extra>",
+    ))
+    fig.add_trace(go.Scatter(
+        x=df["date"], y=df[avg_col],
+        mode="lines", line=dict(width=2, color="grey", dash="dash"), name="Average",
+        hovertemplate="$%{y:.2f}<extra></extra>",
+    ))
+    fig.update_layout(
+        title=dict(text=f"<b>{month_label} {crop_label}</b> Futures Contract Prices"),
+        yaxis_title="Price ($/bushel)",
+        yaxis=dict(range=yaxis_range),
+        xaxis=dict(range=[f"{thisyear}-01-01", f"{thisyear}-12-31"]),
+        height=300,
+        legend=dict(x=0.02, y=0.98, xanchor="left", yanchor="top",
+                     bgcolor="rgba(255,255,255,0.6)", bordercolor="black", borderwidth=1),
+        margin=dict(l=50, r=20, t=40, b=40),
+        hovermode="x unified",
+    )
+    return fig
+
+
+def build_compare_years_data():
+    """One row per year: a composite production index against a composite demand-price
+    index, both unitless. Corn and soybean production aren't on comparable scales (corn
+    runs ~3x soybean volume) any more than their futures prices are, so production gets
+    the same treatment as price below: each crop's yearly production is converted to a
+    z-score against its own full history, then the two z-scores are averaged.
+
+    Production: NASS final-production years (grain_production_history, 2016+) are used
+    where available; wasde_production_backfill fills in earlier years (back to 2008) NASS
+    doesn't cover. Price: the futures contract is quoted daily starting many months before
+    expiration, but we want a single representative pre-harvest value per year, so this
+    averages only the September quotes (the month new-crop harvest expectations firm up),
+    not the full year."""
+    prod_nass = grain_production_history.dropna(subset=["corn_production_million_bu", "soybean_production_million_bu"]).copy()
+    prod_backfill = wasde_production_backfill[~wasde_production_backfill["year"].isin(prod_nass["year"])].dropna(
+        subset=["corn_production_million_bu", "soybean_production_million_bu"]
+    ).copy()
+    prod = pd.concat([prod_nass, prod_backfill], ignore_index=True)
+    corn_prod_mean, corn_prod_std = prod["corn_production_million_bu"].mean(), prod["corn_production_million_bu"].std()
+    soy_prod_mean, soy_prod_std = prod["soybean_production_million_bu"].mean(), prod["soybean_production_million_bu"].std()
+    prod["corn_prod_z"] = (prod["corn_production_million_bu"] - corn_prod_mean) / corn_prod_std
+    prod["soy_prod_z"] = (prod["soybean_production_million_bu"] - soy_prod_mean) / soy_prod_std
+    prod["production_index"] = prod[["corn_prod_z", "soy_prod_z"]].mean(axis=1)
+    rows = prod[["year", "production_index"]]
+
+    # Current year's production is only a WASDE estimate, not a finished harvest, so it
+    # isn't part of the historical set above -- score it against that same historical
+    # mean/std rather than folding it into its own baseline.
+    if wasde_latest is not None:
+        current_year = int(str(wasde_latest["marketing_year"]).split("/")[0])
+        current_corn_z = (wasde_latest["corn_production_million_bu"] - corn_prod_mean) / corn_prod_std
+        current_soy_z = (wasde_latest["soybean_production_million_bu"] - soy_prod_mean) / soy_prod_std
+        current_index = (current_corn_z + current_soy_z) / 2
+        rows = pd.concat([rows, pd.DataFrame([{"year": current_year, "production_index": current_index}])], ignore_index=True)
+
+    sept_futures = futures_hist[futures_hist["date"].dt.month == 9]
+    yearly_price = sept_futures.groupby("year")[["corn_dec_futures", "soy_nov_futures"]].mean().reset_index()
+    corn_mean, corn_std = yearly_price["corn_dec_futures"].mean(), yearly_price["corn_dec_futures"].std()
+    soy_mean, soy_std = yearly_price["soy_nov_futures"].mean(), yearly_price["soy_nov_futures"].std()
+    yearly_price["corn_z"] = (yearly_price["corn_dec_futures"] - corn_mean) / corn_std
+    yearly_price["soy_z"] = (yearly_price["soy_nov_futures"] - soy_mean) / soy_std
+    yearly_price["price_index"] = yearly_price[["corn_z", "soy_z"]].mean(axis=1)
+
+    # September hasn't happened yet for the in-progress year, so it has no row above --
+    # use the most recent available Dec-corn/Nov-soy quote instead, scored against the same
+    # Sept-based mean/std so it lands on the same scale as every other year's index.
+    if thisyear not in yearly_price["year"].values:
+        latest = futures_hist[futures_hist["year"] == thisyear].dropna(
+            subset=["corn_dec_futures", "soy_nov_futures"], how="all"
+        ).sort_values("date")
+        if not latest.empty:
+            corn_latest, soy_latest = latest.iloc[-1][["corn_dec_futures", "soy_nov_futures"]]
+            current_index = pd.Series({
+                "corn": (corn_latest - corn_mean) / corn_std,
+                "soy": (soy_latest - soy_mean) / soy_std,
+            }).mean()
+            yearly_price = pd.concat(
+                [yearly_price, pd.DataFrame([{"year": thisyear, "price_index": current_index}])],
+                ignore_index=True,
+            )
+
+    df = rows.merge(yearly_price[["year", "price_index"]], on="year", how="left")
+    df = df.dropna(subset=["production_index", "price_index"]).sort_values("year")
+    df["low_water"] = df["year"].isin(LOW_WATER_YEARS)
+    df["is_current_year"] = df["year"] == thisyear
+    return df
+
+
+def build_compare_years_fig(df):
+    fig = go.Figure()
+
+    normal = df[~df["low_water"] & ~df["is_current_year"]]
+    low_water = df[df["low_water"] & ~df["is_current_year"]]
+    current = df[df["is_current_year"]]
+
+    fig.add_trace(go.Scatter(
+        x=normal["price_index"], y=normal["production_index"], customdata=normal[["year"]].values,
+        mode="markers", marker=dict(size=12, color="#8ea6bd"), name="Other years",
+        hovertemplate="%{customdata[0]}<extra></extra>",
+    ))
+    fig.add_trace(go.Scatter(
+        x=low_water["price_index"], y=low_water["production_index"], customdata=low_water[["year"]].values,
+        mode="markers", marker=dict(size=13, color="#d95f0e"), name="Low-water years",
+        hovertemplate="%{customdata[0]} (low-water year)<extra></extra>",
+    ))
+    fig.add_trace(go.Scatter(
+        x=current["price_index"], y=current["production_index"], customdata=current[["year"]].values,
+        mode="markers", marker=dict(size=17, color="#1b3a5c", symbol="star"), name=f"{thisyear} (this year)",
+        hovertemplate="%{customdata[0]} (this year)<extra></extra>",
+    ))
+
+    # dividers at a neutral (z-score 0) demand index / production index split the plot
+    # into 4 quadrants -- e.g. top-left is a low-demand, high-production year. Both axes
+    # are now z-score composites centered on 0, so the range is just symmetric padding
+    # around that shared center rather than needing a separately computed midpoint.
+    x_center = 0
+    y_center = 0
+    x_half = (df["price_index"] - x_center).abs().max() * 1.15
+    y_half = (df["production_index"] - y_center).abs().max() * 1.15
+    fig.add_vline(x=x_center, line_dash="dot", line_color="#bbb")
+    fig.add_hline(y=y_center, line_dash="dot", line_color="#bbb")
+
+    fig.update_layout(
+        title="Grain Production vs. Demand Index by Year",
+        xaxis=dict(title="Grain Demand Index (Low → High)", showticklabels=False,
+                    range=[x_center - x_half, x_center + x_half]),
+        yaxis=dict(title="Grain Production Index (Low → High)", showticklabels=False,
+                    range=[y_center - y_half, y_center + y_half]),
+        height=480,
+        width=480,
+        # legend sits below the plot, outside the data area, so it can never overlap a dot
+        legend=dict(orientation="h", x=0.5, y=-0.12, xanchor="center", yanchor="top",
+                     bgcolor="rgba(255,255,255,0.6)", bordercolor="black", borderwidth=1),
+        margin=dict(l=50, r=20, t=50, b=90),
+    )
+    return fig
+
+
+def build_barge_rate_year_fig(year):
+    df_year = barge_rates[barge_rates["year"] == year]
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=df_year["week"], y=df_year["stlrate_per_ton"],
+        mode="lines", line=dict(width=2, color="#d95f0e"), name=str(year), showlegend=False,
+    ))
+    fig.add_trace(go.Scatter(
+        x=df_year["week"], y=df_year["avg_stlrate"],
+        mode="lines", line=dict(width=2, color="grey", dash="dash"), name="Mean",
+    ))
+    fig.add_trace(go.Scatter(
+        x=df_year["week"], y=df_year["plusone"],
+        mode="lines", line=dict(width=0), hoverinfo="skip", showlegend=False,
+    ))
+    fig.add_trace(go.Scatter(
+        x=df_year["week"], y=df_year["minusone"],
+        mode="lines", fill="tonexty", fillcolor="rgba(160,160,160,0.3)",
+        name="±1 SD", line=dict(width=0), hoverinfo="skip",
+    ))
+    fig.update_layout(
+        title=f"STL to NOLA Barge Freight Rates: {year}",
+        yaxis_title="$/ton",
+        height=260,
+        legend=dict(x=0.02, y=0.98, xanchor="left", yanchor="top",
+                     bgcolor="rgba(255,255,255,0.6)", bordercolor="black", borderwidth=1),
+        margin=dict(l=50, r=20, t=40, b=40),
+        hovermode="x unified",
+    )
+    return fig
+
+
+def build_barge_rate_placeholder_fig():
+    fig = go.Figure()
+    fig.update_layout(
+        height=260,
+        margin=dict(l=20, r=20, t=20, b=20),
+        xaxis=dict(visible=False),
+        yaxis=dict(visible=False),
+        annotations=[dict(
+            text="Hover a low-water year above to see that year's barge rates vs. the average.",
+            xref="paper", yref="paper", x=0.5, y=0.5, showarrow=False,
+            font=dict(size=13, color="#888"),
+        )],
+    )
+    return fig
+
+
+DEMAND_EXPLANATION_BOX_STYLE = {
+    "flex": "1", "min-width": "400px",
+    "border": "1px solid #b8d4ec", "border-radius": "8px",
+    "padding": "16px 20px", "background": "#eaf3fb",
+}
+
+
+def build_demand_explanation_boxes():
+    return html.Div(
+        style={"display": "flex", "gap": "30px", "flex-wrap": "wrap", "margin-bottom": "28px"},
+        children=[
+            html.Div(
+                style=DEMAND_EXPLANATION_BOX_STYLE,
+                children=[
+                    html.H4("1. How much grain is the US expected to produce?", style=SECTION_HEADER_STYLE),
+                    html.Div(
+                        "A bigger harvest means more grain competing for barge space to move it to market.",
+                        style=SECTION_SUBTEXT_STYLE
+                    ),
+                ]
+            ),
+            html.Div(
+                style=DEMAND_EXPLANATION_BOX_STYLE,
+                children=[
+                    html.H4("2. What does global grain demand look like?", style=SECTION_HEADER_STYLE),
+                    html.Div(
+                        "Futures prices reflect what buyers are willing to pay for grain still in the field — "
+                        "prices running above the recent average signal stronger demand pulling more grain "
+                        "toward export, and more grain moving by barge.",
+                        style=SECTION_SUBTEXT_STYLE
+                    ),
+                ]
+            ),
+        ]
+    )
+
+
+def build_demand_crop_section(production_fig, production_caption, futures_fig):
+    return html.Div(
+        style={"margin-bottom": "40px"},
+        children=[
+            html.Div(
+                style={"display": "flex", "gap": "30px", "flex-wrap": "wrap"},
+                children=[
+                    html.Div(
+                        style={"flex": "1", "min-width": "400px"},
+                        children=[
+                            dcc.Graph(figure=production_fig, config={"displayModeBar": False}),
+                            html.Div(production_caption, style=CAPTION_STYLE),
+                        ]
+                    ),
+                    html.Div(
+                        style={"flex": "1", "min-width": "400px"},
+                        children=[
+                            dcc.Graph(figure=futures_fig, config={"displayModeBar": False}),
+                        ]
+                    ),
+                ]
+            ),
+        ]
+    )
+
+
+_corn_production_fig, _corn_production_caption = build_production_chart("corn")
+_soybean_production_fig, _soybean_production_caption = build_production_chart("soybean")
+_corn_futures_fig = build_futures_chart("corn")
+_soybean_futures_fig = build_futures_chart("soybean")
+_compare_years_fig = build_compare_years_fig(build_compare_years_data())
+_barge_rate_placeholder_fig = build_barge_rate_placeholder_fig()
 
 app.layout = html.Div(
     style={"width": "100%", "margin": "0", "padding": "0"},
@@ -556,6 +995,7 @@ app.layout = html.Div(
         # Title bar
         html.Div(
             style={
+                "position": "relative",
                 "width": "100%",
                 "padding": "15px 0",
                 "background": "#2166ac",
@@ -569,7 +1009,14 @@ app.layout = html.Div(
                         "font-family": "'Bebas Neue', sans-serif",
                         "font-size": "26px", "letter-spacing": "1.5px",
                     }
-                )
+                ),
+                html.Div(
+                    style={"position": "absolute", "top": "50%", "right": "20px", "transform": "translateY(-50%)"},
+                    children=[
+                        html.Button("River Conditions", id="nav-river-conditions", n_clicks=0, style=NAV_LINK_ACTIVE),
+                        html.Button("Barge Demand", id="nav-barge-demand", n_clicks=0, style=NAV_LINK_INACTIVE),
+                    ]
+                ),
             ]
         ),
 
@@ -582,6 +1029,10 @@ app.layout = html.Div(
         ##################################
         # Map fills the full width; controls and plots panel float on top of it
         html.Div(
+            id="river-page",
+            style=RIVER_PAGE_VISIBLE,
+            children=[
+            html.Div(
             style={"position": "relative", "width": "100%", "height": "92vh"},
             children=[
 
@@ -742,23 +1193,38 @@ app.layout = html.Div(
                                         {
                                             "label": html.Span([
                                                 html.Div([
-                                                    html.Span("Riverbed Surveys: Navigation Risk under Low Water"),
+                                                    html.Span("Riverbed Surveys", style={"font-size": "16px"}),
+                                                    html.Div(
+                                                        "Navigation Risk under Low Water",
+                                                        style={"font-size": "13px", "display": "block", "width": "100%"}
+                                                    ),
                                                     html.Div(
                                                         style={"display": "flex", "gap": "10px", "margin-top": "5px", "margin-left": "4px"},
                                                         children=[
                                                             html.Div([
                                                                 html.Div(style={"width": "12px", "height": "12px", "border-radius": "50%", "background": RISK_BINS[0][1], "display": "inline-block", "margin-right": "4px", "vertical-align": "middle"}),
-                                                                html.Span("Not at risk", style={"font-size": "12px", "vertical-align": "middle"}),
+                                                                html.Span("Low Risk", style={"font-size": "13px", "vertical-align": "middle"}),
+                                                            ]),
+                                                            html.Div([
+                                                                html.Div(style={"width": "12px", "height": "12px", "border-radius": "50%", "background": RISK_BINS[1][1], "display": "inline-block", "margin-right": "4px", "vertical-align": "middle"}),
+                                                                html.Span("Medium Risk", style={"font-size": "13px", "vertical-align": "middle"}),
                                                             ]),
                                                             html.Div([
                                                                 html.Img(src="/assets/at_risk_marker.png", height="16", style={"display": "inline-block", "margin-right": "4px", "vertical-align": "middle"}),
-                                                                html.Span("At risk", style={"font-size": "12px", "vertical-align": "middle"}),
+                                                                html.Span("High Risk", style={"font-size": "13px", "vertical-align": "middle"}),
                                                             ]),
                                                         ]
                                                     ),
                                                 ])
                                             ]),
                                             "value": "bathy",
+                                        },
+                                        {
+                                            "label": html.Span([
+                                                html.Img(src="/assets/raindrop.png", height="22", style={"vertical-align": "middle", "margin-right": "5px"}),
+                                                "Stream Gage",
+                                            ]),
+                                            "value": "stage",
                                         },
                                         {
                                             "label": html.Span([
@@ -788,17 +1254,10 @@ app.layout = html.Div(
                                             ]),
                                             "value": "draft",
                                         },
-                                        {
-                                            "label": html.Span([
-                                                html.Img(src="/assets/raindrop.png", height="22", style={"vertical-align": "middle", "margin-right": "5px"}),
-                                                "Stream Gage",
-                                            ]),
-                                            "value": "stage",
-                                        },
                                     ],
-                                    value=["bathy", "dredging", "shoaling", "draft", "stage"],
+                                    value=["bathy", "stage"],
                                     inputStyle={"margin-right": "6px"},
-                                    labelStyle={"display": "flex", "align-items": "center", "margin-bottom": "5px", "font-size": "14px"},
+                                    labelStyle={"display": "flex", "align-items": "center", "margin-bottom": "5px", "font-size": "16px"},
                                 )
                             ]
                         )
@@ -842,6 +1301,60 @@ app.layout = html.Div(
 
             ]
         )
+        ],
+        ),
+
+        # Barge Demand page -- full page (not an overlay), hidden until its nav link is clicked
+        html.Div(
+            id="demand-page",
+            style=DEMAND_PAGE_HIDDEN,
+            children=[
+                html.H3(
+                    "Demand for Grain Barges is impacted by:",
+                    style={
+                        "margin": "0 0 18px 0",
+                        "font-family": "'Bebas Neue', sans-serif",
+                        "letter-spacing": "0.5px", "font-size": "24px", "color": "#1b3a5c",
+                    }
+                ),
+
+                build_demand_explanation_boxes(),
+                build_demand_crop_section(_corn_production_fig, _corn_production_caption, _corn_futures_fig),
+                build_demand_crop_section(_soybean_production_fig, _soybean_production_caption, _soybean_futures_fig),
+
+                dcc.Store(id="compare-years-store", data=False),
+                html.Button(
+                    "See how this year compares to other years",
+                    id="compare-years-toggle", n_clicks=0, style=COMPARE_YEARS_TOGGLE_STYLE,
+                ),
+                html.Div(
+                    id="compare-years-box",
+                    style=COMPARE_YEARS_BOX_HIDDEN,
+                    children=[
+                        html.Button(
+                            "✕", id="compare-years-close",
+                            style={
+                                "position": "absolute", "top": "8px", "right": "10px",
+                                "border": "none", "background": "none", "cursor": "pointer",
+                                "font-size": "18px", "color": "#888",
+                            }
+                        ),
+                        html.Div(
+                            style={"display": "flex", "justify-content": "center"},
+                            children=[
+                                dcc.Graph(
+                                    id="compare-years-scatter", figure=_compare_years_fig,
+                                    config={"displayModeBar": False, "responsive": False},
+                                ),
+                            ]
+                        ),
+                        dcc.Graph(id="compare-years-barge-rate-plot", figure=_barge_rate_placeholder_fig, config={"displayModeBar": False}),
+                        # Space for Molly's own write-up on how to read this chart -- left blank on purpose.
+                        html.Div(id="compare-years-explanation"),
+                    ]
+                ),
+            ]
+        ),
     ]
 )
 
@@ -866,6 +1379,51 @@ def toggle_plots_panel(n_clicks, is_open):
     return style, new_state, label
 
 
+# --------------------------------------------------
+# BARGE DEMAND PAGE
+# --------------------------------------------------
+
+@app.callback(
+    Output("river-page", "style"),
+    Output("demand-page", "style"),
+    Output("nav-river-conditions", "style"),
+    Output("nav-barge-demand", "style"),
+    Input("nav-river-conditions", "n_clicks"),
+    Input("nav-barge-demand", "n_clicks"),
+    prevent_initial_call=True
+)
+def toggle_top_level_page(river_clicks, demand_clicks):
+    if dash.ctx.triggered_id == "nav-barge-demand":
+        return RIVER_PAGE_HIDDEN, DEMAND_PAGE_VISIBLE, NAV_LINK_INACTIVE, NAV_LINK_ACTIVE
+    return RIVER_PAGE_VISIBLE, DEMAND_PAGE_HIDDEN, NAV_LINK_ACTIVE, NAV_LINK_INACTIVE
+
+
+@app.callback(
+    Output("compare-years-box", "style"),
+    Output("compare-years-store", "data"),
+    Input("compare-years-toggle", "n_clicks"),
+    Input("compare-years-close", "n_clicks"),
+    State("compare-years-store", "data"),
+    prevent_initial_call=True
+)
+def toggle_compare_years_box(open_clicks, close_clicks, is_open):
+    new_state = False if dash.ctx.triggered_id == "compare-years-close" else not is_open
+    style = COMPARE_YEARS_BOX_VISIBLE if new_state else COMPARE_YEARS_BOX_HIDDEN
+    return style, new_state
+
+
+@app.callback(
+    Output("compare-years-barge-rate-plot", "figure"),
+    Input("compare-years-scatter", "hoverData"),
+)
+def update_compare_years_barge_rate(hover_data):
+    if not hover_data:
+        return _barge_rate_placeholder_fig
+    year = hover_data["points"][0]["customdata"][0]
+    if year not in LOW_WATER_YEARS:
+        return _barge_rate_placeholder_fig
+    return build_barge_rate_year_fig(year)
+
 
 # --------------------------------------------------
 # CALLBACK
@@ -882,12 +1440,15 @@ def update_map(year, layers, selected_survey):
     fig = go.Figure()
     df_b = bathy[bathy['year']==year]
     # hide the dot for whichever survey is currently showing its polygon overlay, but if it's
-    # at risk, keep its marker up (faded) at the problem point so it's not lost under the polygon
+    # High risk, keep its marker up (faded) at the problem point so it's not lost under the
+    # polygon -- only High needs this since its marker is otherwise invisible (opacity 0) with
+    # only the icon_layers overlay representing it, which is also excluded once df_b drops sid.
+    # Low/Medium use plain opacity-1 dot markers, so hiding them under the polygon is fine as-is.
     selected_at_risk_row = None
     if selected_survey:
         sid = selected_survey.get("survey_id")
         df_b = df_b[df_b["survey_id"] != sid]
-        match = bathy[(bathy["survey_id"] == sid) & (bathy["at_risk_eff"] == "yes")]
+        match = bathy[(bathy["survey_id"] == sid) & (bathy["at_risk_eff"] == "high")]
         if not match.empty:
             selected_at_risk_row = match.iloc[0]
     df_n = notices[notices['year']==year]
@@ -985,13 +1546,14 @@ def update_map(year, layers, selected_survey):
 
     icon_layers = []
 
-    #  bathym layer - 2 risk bins (at_risk yes/no), each its own trace so color/legend are discrete.
-    # drawn here (before dredging/shoaling/other) so it sits behind them on the map, but
-    # legendrank pushes it below them in the legend regardless of draw order
+    #  bathym layer - 3 risk bins (at_risk low/medium/high), each its own trace so color/legend
+    # are discrete. drawn here (before dredging/shoaling/other) so it sits behind them on the
+    # map, but legendrank pushes it below them in the legend regardless of draw order
     if "bathy" in layers:
         risk_masks = {
-            "Not At Risk": df_b["at_risk_eff"] != "yes",
-            "At Risk": df_b["at_risk_eff"] == "yes",
+            "Low Risk": df_b["at_risk_eff"] == "low",
+            "Medium Risk": df_b["at_risk_eff"] == "medium",
+            "High Risk": df_b["at_risk_eff"] == "high",
         }
         for label, color, size in RISK_BINS:
             df_bin = df_b[risk_masks[label]].copy()
@@ -1017,13 +1579,13 @@ def update_map(year, layers, selected_survey):
             df_bin["gage_uncertainty"] = df_bin["milemarker"].apply(_uncertainty_for_mile)
             custom = df_bin[["date_fmt", "depth", "survey_id", "click_hint", "gage_label", "gage_name", "gage_value", "gage_uncertainty"]].copy()
             custom.insert(0, "_type", "bathy")
-            is_at_risk = label == "At Risk"
+            is_high_risk = label == "High Risk"
             fig.add_trace(
                 go.Scattermap(
                     lon=df_bin["LON"],
                     lat=df_bin["LAT"],
                     mode="markers",
-                    marker=dict(size=size, color=color, opacity=0.0 if is_at_risk else 1.0),
+                    marker=dict(size=size, color=color, opacity=0.0 if is_high_risk else 1.0),
                     showlegend=True,
                     legendgroup="depth_survey",
                     legendgrouptitle_text="Survey Locations:<br>Navigation Risk under Low Water",
@@ -1037,7 +1599,7 @@ def update_map(year, layers, selected_survey):
                     )
                 )
             )
-            if is_at_risk:
+            if is_high_risk:
                 icon_layers.append({
                     "sourcetype": "geojson",
                     "source": {

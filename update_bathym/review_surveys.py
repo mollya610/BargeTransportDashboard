@@ -11,16 +11,22 @@ For each survey with confirmed=="no" in bathym_fixed.csv, shows:
   - left panel: local AIS vessel-density cells with an adjustable-percentile
     "nav-path" outline (the top cells that account for P% of local traffic)
   - right panel: the survey's raw points colored by depth, same outline overlaid
-  - an auto "at risk" flag: yes if any point inside the nav-path outline is
-    shallower than a threshold
+  - an auto risk suggestion: "medium" if any point inside the nav-path outline
+    is shallower than a threshold, "low" otherwise. "high" is manual-only --
+    the auto check can't tell an impassable channel from a merely narrow one,
+    so Molly bumps it up herself by eye. Three tiers, judged visually:
+      - high:   nav channel looks almost completely impassable at low water
+      - medium: a spot in the channel looks risky but still crossable, or the
+                channel looks like it's gotten narrower
+      - low:    channel looks fine at low water
 
 Clicking a point on the right-hand survey map marks the exact problem spot
-within the surveyed area. If the survey is approved as at-risk, that lon/lat
-is saved to bathym_fixed.csv (problem_lon/problem_lat) and app.py plots the
-survey's dot there instead of at the survey's overall center -- full (not at
-risk) surveys are unaffected and still center on the whole surveyed area.
+within the surveyed area. If the survey is approved as medium or high risk,
+that lon/lat is saved to bathym_fixed.csv (problem_lon/problem_lat) and app.py
+plots the survey's dot there instead of at the survey's overall center -- low
+risk surveys are unaffected and still center on the whole surveyed area.
 
-Molly can tweak the percentile/threshold, override the risk flag, preview a
+Molly can tweak the percentile/threshold, override the risk level, preview a
 sign-convention fix, then Approve (writes confirmed="yes" + at_risk back to
 bathym_fixed.csv, and patches Z_navd88 in the gpkg if the sign was flipped),
 Reject (writes confirmed="rejected" -- excluded from the live map and from
@@ -178,13 +184,17 @@ def compute_nav_outline(local_ais, percentile):
     return dissolved.simplify(SIMPLIFY_M)
 
 
-def compute_at_risk(nav_outline_utm, points_utm, threshold_ft):
+def compute_auto_risk_level(nav_outline_utm, points_utm, threshold_ft):
+    """Auto-suggested risk level: "medium" if any point inside the nav-path
+    outline is shallower than threshold_ft, else "low". Never suggests "high"
+    -- that tier means the channel looks essentially impassable, which is a
+    visual judgment call left to the reviewer."""
     if nav_outline_utm is None or nav_outline_utm.is_empty:
-        return "no"
+        return "low"
     inside = points_utm[points_utm.geometry.within(nav_outline_utm)]
     if inside.empty:
-        return "no"
-    return "yes" if (inside["depth_ft"] <= threshold_ft).any() else "no"
+        return "low"
+    return "medium" if (inside["depth_ft"] <= threshold_ft).any() else "low"
 
 
 def weighted_bathym_mean(gdf_utm, flip_sign):
@@ -283,14 +293,19 @@ def build_survey_figure(points_utm, nav_outline_utm, threshold_ft, center, probl
 # ---------------- APP ----------------
 app = Dash(__name__)
 
-BADGE_YES = {
-    "display": "inline-block", "padding": "4px 14px", "border-radius": "12px",
-    "background": "#a50026", "color": "white", "font-weight": "bold",
-}
-BADGE_NO = {
+BADGE_LOW = {
     "display": "inline-block", "padding": "4px 14px", "border-radius": "12px",
     "background": "#1a9850", "color": "white", "font-weight": "bold",
 }
+BADGE_MEDIUM = {
+    "display": "inline-block", "padding": "4px 14px", "border-radius": "12px",
+    "background": "#fb8c00", "color": "white", "font-weight": "bold",
+}
+BADGE_HIGH = {
+    "display": "inline-block", "padding": "4px 14px", "border-radius": "12px",
+    "background": "#a50026", "color": "white", "font-weight": "bold",
+}
+BADGE_BY_LEVEL = {"low": BADGE_LOW, "medium": BADGE_MEDIUM, "high": BADGE_HIGH}
 DUPLICATE_WARNING_STYLE = {
     "display": "inline-block", "padding": "4px 14px", "border-radius": "12px",
     "background": "#fff3cd", "color": "#7a5b00", "font-weight": "bold",
@@ -328,8 +343,8 @@ app.layout = html.Div(
         html.Div(id="survey-header", style={"margin-bottom": "10px"}),
         html.Div(
             "Click a point on the survey map (right) to mark exactly where the problem "
-            "is -- if the survey is approved as at-risk, that point (instead of the "
-            "survey's overall center) is what shows up as the dot on the live map.",
+            "is -- if the survey is approved as medium or high risk, that point (instead "
+            "of the survey's overall center) is what shows up as the dot on the live map.",
             id="problem-point-hint",
             style={"margin-bottom": "6px", "font-size": "12px", "color": "#555"},
         ),
@@ -358,11 +373,15 @@ app.layout = html.Div(
                 ]),
 
                 html.Div([
-                    html.Label("Risk override"),
+                    html.Label("Risk level"),
                     dcc.RadioItems(
                         id="risk-override",
-                        options=[{"label": "At risk", "value": "yes"}, {"label": "Not at risk", "value": "no"}],
-                        value="no", inline=True,
+                        options=[
+                            {"label": "Low", "value": "low"},
+                            {"label": "Medium", "value": "medium"},
+                            {"label": "High", "value": "high"},
+                        ],
+                        value="low", inline=True,
                     ),
                 ]),
 
@@ -403,7 +422,7 @@ def recompute(pending, index, percentile, threshold, flip_values, problem_point)
     if not pending:
         empty = go.Figure()
         empty.update_layout(map=dict(style="carto-darkmatter"), margin=dict(l=0, r=0, t=0, b=0))
-        return empty, empty, html.Div("No surveys pending review."), "All caught up", "no"
+        return empty, empty, html.Div("No surveys pending review."), "All caught up", "low"
 
     index = index % len(pending)
     file = pending[index]
@@ -413,7 +432,7 @@ def recompute(pending, index, percentile, threshold, flip_values, problem_point)
     row, points_utm = load_survey_points(file, flip_sign)
     local_ais = local_corridor_subset(points_utm)
     nav_outline_utm = compute_nav_outline(local_ais, percentile)
-    auto_flag = compute_at_risk(nav_outline_utm, points_utm, threshold)
+    auto_level = compute_auto_risk_level(nav_outline_utm, points_utm, threshold)
 
     center_pt = gpd.GeoSeries([points_utm.union_all().centroid], crs=UTM_CRS).to_crs(4326).iloc[0]
     center = dict(lat=center_pt.y, lon=center_pt.x)
@@ -424,13 +443,13 @@ def recompute(pending, index, percentile, threshold, flip_values, problem_point)
     ais_fig = build_ais_figure(local_ais, nav_outline_utm, center, uirevision=file)
     survey_fig = build_survey_figure(points_utm, nav_outline_utm, threshold, center, problem_point, uirevision=file)
 
-    badge_style = BADGE_YES if auto_flag == "yes" else BADGE_NO
+    badge_style = BADGE_BY_LEVEL[auto_level]
     header_spans = [
         html.Span(f"{file}", style={"font-weight": "bold", "margin-right": "14px"}),
         html.Span(f"date: {row['date']}", style={"margin-right": "14px"}),
         html.Span(f"stored bathym_mean: {row['bathym_mean']:.2f}, depth: {row['depth']:.2f} ft", style={"margin-right": "14px"}),
         html.Span(f"local depth range: {points_utm['depth_ft'].min():.1f}–{points_utm['depth_ft'].max():.1f} ft", style={"margin-right": "14px"}),
-        html.Span(f"auto flag: {auto_flag}", style=badge_style),
+        html.Span(f"auto suggestion: {auto_level}", style=badge_style),
     ]
     dup_warning = _duplicate_warning(row, load_bathym_fixed())
     if dup_warning is not None:
@@ -444,7 +463,7 @@ def recompute(pending, index, percentile, threshold, flip_values, problem_point)
     status = f"Survey {index + 1} of {len(pending)} pending"
 
     triggered = ctx.triggered_id
-    override_value = auto_flag if triggered in ("pending-store", "index-store", None) else no_update
+    override_value = auto_level if triggered in ("pending-store", "index-store", None) else no_update
     return ais_fig, survey_fig, header, status, override_value
 
 
@@ -563,9 +582,9 @@ def approve_survey(n_clicks, pending, index, percentile, threshold, flip_values,
 
     df.loc[mask, "confirmed"] = "yes"
     df.loc[mask, "at_risk"] = risk_value
-    # the problem point only means anything for a survey that's actually flagged at
-    # risk -- otherwise clear it so a stale mark can't linger from an earlier pass
-    if risk_value == "yes" and problem_point is not None:
+    # the problem point only means anything for a survey flagged medium or high risk --
+    # otherwise clear it so a stale mark can't linger from an earlier pass
+    if risk_value != "low" and problem_point is not None:
         df.loc[mask, "problem_lon"] = problem_point["lon"]
         df.loc[mask, "problem_lat"] = problem_point["lat"]
     else:
