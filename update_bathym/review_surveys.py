@@ -45,6 +45,7 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 from dash import Dash, dcc, html, Input, Output, State, ctx, no_update
+from shapely.geometry import Point
 
 # ---------------- CONFIG ----------------
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -53,6 +54,8 @@ DATA_DIR = SCRIPT_DIR / "data"
 NAVD88_DIR = DATA_DIR / "NAVD88Files"
 
 CORRIDOR_FILE = SCRIPT_DIR / "ais_grid_counts_clean5.csv"
+DATUM_INFO_FILE = SCRIPT_DIR / "datum_info.csv"
+MILEMARKERS_FILE = SCRIPT_DIR / "usace_river_mile_markers.csv"
 BATHYM_FIXED_FILE = REPO_ROOT / "bathym_fixed.csv"
 
 UTM_CRS = "EPSG:26915"
@@ -60,6 +63,7 @@ GRID_CELL_M = 75  # ais_grid_counts_clean5.csv cell spacing
 GRID_MATCH_DIST_M = (GRID_CELL_M / 2) * math.sqrt(2)  # matches compute_bathym_stats.py's sjoin_nearest
 BBOX_BUFFER_M = 500  # local AIS subset = survey bbox + this margin
 NAV_BUFFER_M = 60  # bridges adjacent (incl. diagonal) 75m grid cells before dissolve
+POLY_BUFFER_M = 40  # per-point buffer before dissolve, matches make_depth_polygons.py's BUFFER_M
 SIMPLIFY_M = 5  # same idiom as make_depth_polygons.py
 
 DEFAULT_PERCENTILE = 80
@@ -434,7 +438,11 @@ def recompute(pending, index, percentile, threshold, flip_values, problem_point)
     nav_outline_utm = compute_nav_outline(local_ais, percentile)
     auto_level = compute_auto_risk_level(nav_outline_utm, points_utm, threshold)
 
-    center_pt = gpd.GeoSeries([points_utm.union_all().centroid], crs=UTM_CRS).to_crs(4326).iloc[0]
+    # centroid of a point-union is just the mean of the points -- computing it this way
+    # instead of union_all().centroid avoids GEOS dissolving potentially millions of
+    # points into one geometry, which is impractically slow for the largest surveys
+    center_utm = Point(points_utm.geometry.x.mean(), points_utm.geometry.y.mean())
+    center_pt = gpd.GeoSeries([center_utm], crs=UTM_CRS).to_crs(4326).iloc[0]
     center = dict(lat=center_pt.y, lon=center_pt.x)
 
     # uirevision keyed to the file: keeps the operator's current pan/zoom when the

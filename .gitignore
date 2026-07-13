@@ -5,6 +5,7 @@ __pycache__/
 # runtime-downloaded files
 freight_rates_southbound.xlsx
 price_spreads_futures_usda.xlsx
+wasde_latest.xls
 
 # large pipeline output folders
 update_bathym/data/SurveyPointLayers/

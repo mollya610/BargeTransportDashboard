@@ -15,7 +15,7 @@ from pathlib import Path
 import geopandas as gpd
 import numpy as np
 import pandas as pd
-from shapely.ops import unary_union
+from shapely.geometry import Point
 
 # ── CONFIG ────────────────────────────────────────────────────────────────────
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -33,6 +33,14 @@ MILEMARKERS_FILE = SCRIPT_DIR / "usace_river_mile_markers.csv"
 UTM_CRS = "EPSG:26915"
 BUFFER_M = 40        # buffer radius per survey point before dissolve
 SIMPLIFY_M = 5       # simplify tolerance on dissolved polygons
+
+# Multibeam surveys can carry 300k-1M+ points -- buffering + dissolving that many
+# circles is what hangs on those files. Above this count, grid-downsample per
+# depth bin first: points closer than GRID_CELL_M apart produce near-identical
+# buffer coverage anyway, so this cuts point count ~100-500x with no visible
+# change to the output polygons.
+DOWNSAMPLE_THRESHOLD_PTS = 150_000
+GRID_CELL_M = 20
 
 # Depth bins: (lower_inclusive, upper_exclusive, label)
 # None = unbounded on that side
@@ -126,8 +134,11 @@ for fpath in new_files:
     gdf = gpd.read_file(fpath)          # EPSG:3857 from read_in_surveys.py
     gdf_utm = gdf.to_crs(UTM_CRS)
 
-    # Look up Memphis=-5ft water surface elevation at the survey's river mile
-    midpoint_utm = gdf_utm.union_all().centroid
+    # Look up Memphis=-5ft water surface elevation at the survey's river mile.
+    # centroid of a point-union is just the mean of the points -- computing it this
+    # way instead of union_all().centroid avoids GEOS dissolving millions of points
+    # into one geometry, which is impractically slow for the largest LM_26_HIK surveys
+    midpoint_utm = Point(gdf_utm.geometry.x.mean(), gdf_utm.geometry.y.mean())
     mile = nearest_mile(midpoint_utm, is_lm)
     combined_mile = mile if is_lm else mile + 953
     lwrp = interp_lwrp(combined_mile, datum_info, "MileMarker", "thresh_el")
@@ -140,6 +151,14 @@ for fpath in new_files:
     if gdf_utm.empty:
         print(f"{survey_id}: no points after binning, skipping")
         continue
+
+    depth_min, depth_max = gdf_utm["depth_ft"].min(), gdf_utm["depth_ft"].max()
+    n_pts_orig = len(gdf_utm)
+    if n_pts_orig > DOWNSAMPLE_THRESHOLD_PTS:
+        gx = (gdf_utm.geometry.x // GRID_CELL_M).astype(int)
+        gy = (gdf_utm.geometry.y // GRID_CELL_M).astype(int)
+        gdf_utm = gdf_utm.loc[~pd.DataFrame({"b": gdf_utm["depth_bin"], "x": gx, "y": gy}).duplicated()]
+        print(f"{survey_id}: downsampled {n_pts_orig} -> {len(gdf_utm)} pts ({GRID_CELL_M}m grid) before buffering")
 
     # Buffer points then dissolve into one polygon per depth bin
     pts = gdf_utm[["depth_bin", "geometry"]].copy()
@@ -159,10 +178,9 @@ for fpath in new_files:
 
     out_path = OUT_DIR / f"{survey_id}_depth_polygons.geojson"
     dissolved.to_file(out_path, driver="GeoJSON")
-    n_pts = len(gdf_utm)
     n_bins = len(dissolved)
-    depth_range = f"{gdf_utm['depth_ft'].min():.1f}–{gdf_utm['depth_ft'].max():.1f} ft"
-    print(f"{survey_id}: {n_pts} pts → {n_bins} depth-bin polygons, depth {depth_range}, mile {mile:.1f}")
+    depth_range = f"{depth_min:.1f}–{depth_max:.1f} ft"
+    print(f"{survey_id}: {n_pts_orig} pts → {n_bins} depth-bin polygons, depth {depth_range}, mile {mile:.1f}")
 
     # Clean up intermediate files now that the GeoJSON is confirmed written
     navd88_gpkg = fpath  # already the NAVD88Files path

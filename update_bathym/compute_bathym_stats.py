@@ -4,7 +4,9 @@ from pathlib import Path
 import geopandas as gpd
 import numpy as np
 import pandas as pd
+import shapely
 from shapely import wkt as shapely_wkt
+from shapely.geometry import Point
 
 # ---------------- CONFIG ----------------
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -83,8 +85,15 @@ for fpath in new_files:
     segment_id = gdf["segment_id"].iloc[0]  # assigned in process_surveys.py
     print(f"{fpath.name}: {date}")
 
-    poly_tosave = gdf.union_all().convex_hull
-    midpoint = gdf.union_all().envelope.centroid
+    # gdf.union_all() dissolves every point into one geometry first, which is
+    # impractically slow for surveys with hundreds of thousands to millions of
+    # points (some LM_26_HIK surveys do). Convex hull and envelope don't need that:
+    # a hull is unaffected by duplicate/overlapping points, and an envelope's
+    # centroid is just the bounding-box center either way.
+    coords = np.column_stack([gdf.geometry.x.values, gdf.geometry.y.values])
+    poly_tosave = shapely.convex_hull(shapely.multipoints(coords))
+    minx, miny, maxx, maxy = gdf.total_bounds
+    midpoint = Point((minx + maxx) / 2, (miny + maxy) / 2)
     midpoint_utm = gpd.GeoSeries([midpoint], crs="EPSG:4326").to_crs(UTM_CRS).iloc[0]
 
     # weight bathymetry by vessel traffic: assign each survey point the vessel

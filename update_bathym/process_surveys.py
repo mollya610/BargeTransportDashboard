@@ -1,7 +1,7 @@
 import pandas as pd
 import geopandas as gpd
 from pathlib import Path
-from shapely.ops import unary_union
+from shapely.geometry import Point
 
 # ---------------- CONFIG ----------------
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -79,7 +79,11 @@ for fpath in files:
     meta_row = metadata.loc[metadata["survey_id"] == survey_id]
     datum = str(meta_row["datum"].iloc[0]).upper() if not meta_row.empty else "UNKNOWN"
 
-    midpoint = unary_union(gdf.geometry).centroid
+    # centroid of a MultiPoint union is just the arithmetic mean of its points --
+    # computing it this way instead of unary_union(...).centroid avoids GEOS having
+    # to build/dissolve a union geometry, which is impractically slow for surveys
+    # with hundreds of thousands to millions of points (some LM_26_HIK surveys do)
+    midpoint = Point(gdf.geometry.x.mean(), gdf.geometry.y.mean())
     midpoint_utm = gpd.GeoSeries([midpoint], crs=gdf.crs).to_crs(UTM_CRS).iloc[0]
     gdf["segment_id"] = nearest_segment_id(midpoint_utm)
 
