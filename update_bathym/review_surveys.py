@@ -37,6 +37,7 @@ pending for a later pass).
 Local-only tool, never deployed -- runs on its own port, separate from app.py.
 """
 
+import argparse
 import math
 from pathlib import Path
 
@@ -47,11 +48,31 @@ import plotly.graph_objects as go
 from dash import Dash, dcc, html, Input, Output, State, ctx, no_update
 from shapely.geometry import Point
 
+# ---------------- CLI ----------------
+# Two modes:
+#   points   (default) -- normal review of confirmed=="no" surveys, reading raw points
+#             straight out of NAVD88Files/*.gpkg. This is the original workflow.
+#   polygons -- re-review of surveys that are already confirmed=="yes" for a given
+#             year, re-classifying at_risk (e.g. after the 3-tier system replaced an
+#             older yes/no flag) WITHOUT the raw gpkg, which stage 5 already deleted.
+#             Reads the already-generated DepthPolygons/*.geojson instead -- coarser
+#             (dissolved/buffered/simplified bins, not individual points) but enough
+#             to eyeball nav-channel risk, and it's the same data app.py itself shows.
+_parser = argparse.ArgumentParser()
+_parser.add_argument("--mode", choices=["points", "polygons"], default="points")
+_parser.add_argument("--year", type=int, default=None, help="required with --mode polygons")
+_cli_args = _parser.parse_args()
+MODE = _cli_args.mode
+YEAR = _cli_args.year
+if MODE == "polygons" and YEAR is None:
+    raise SystemExit("--mode polygons requires --year YYYY")
+
 # ---------------- CONFIG ----------------
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent
 DATA_DIR = SCRIPT_DIR / "data"
 NAVD88_DIR = DATA_DIR / "NAVD88Files"
+DEPTH_POLY_DIR = DATA_DIR / "DepthPolygons"
 
 CORRIDOR_FILE = SCRIPT_DIR / "ais_grid_counts_clean5.csv"
 DATUM_INFO_FILE = SCRIPT_DIR / "datum_info.csv"
@@ -90,6 +111,26 @@ DEPTH_BINS = [
     (None, 5,     "<5 ft"),
 ]
 BIN_ORDER = {label: i for i, (_, _, label) in enumerate(DEPTH_BINS)}
+BIN_LOWER = {label: lo for lo, hi, label in DEPTH_BINS}
+BIN_UPPER = {label: hi for lo, hi, label in DEPTH_BINS}
+
+
+def bin_range_text(labels):
+    """Display string for the union of depth bins present in a polygon set, e.g.
+    '<5-13 ft' -- used in --mode polygons where there's no exact point min/max."""
+    labels = list(labels)
+    if not labels:
+        return "n/a"
+    # "<5 ft" is the only bin with lo=None, ">20 ft" the only one with hi=None
+    if "<5 ft" in labels:
+        lo_text = "<5"
+    else:
+        lo_text = f"{min(BIN_LOWER[l] for l in labels):.1f}"
+    if ">20 ft" in labels:
+        hi_text = ">20"
+    else:
+        hi_text = f"{max(BIN_UPPER[l] for l in labels):.1f}"
+    return f"{lo_text}-{hi_text} ft"
 DEPTH_POLY_COLORS = {
     ">20 ft":      "#084594",
     "17.5-20 ft":  "#2171b5",
@@ -138,6 +179,14 @@ def get_pending_files():
     return [f for f in pending if (NAVD88_DIR / f).exists()]
 
 
+def get_requeue_files(year):
+    """Surveys to re-review in --mode polygons: already confirmed=="yes" for `year`
+    and their depth-polygon geojson exists (stage 5 already ran and deleted the raw gpkg)."""
+    df = load_bathym_fixed()
+    files = df.loc[(df["confirmed"] == "yes") & (df["year"] == year), "file"].tolist()
+    return [f for f in files if (DEPTH_POLY_DIR / f"{f.replace('_SurveyPoint.gpkg', '')}_depth_polygons.geojson").exists()]
+
+
 # ---------------- COMPUTATION ----------------
 
 def _geom_to_lonlat(geom):
@@ -165,6 +214,19 @@ def load_survey_points(file, flip_sign):
         gdf_utm["depth_ft"] = water_elev + gdf_utm["Z_navd88"]
     else:
         gdf_utm["depth_ft"] = water_elev - gdf_utm["Z_navd88"]
+    return row, gdf_utm
+
+
+def load_survey_polygons(file):
+    """Depth-bin polygons for `file` (--mode polygons), reprojected to UTM. Used
+    instead of load_survey_points once the raw gpkg has already been deleted by
+    stage 5 -- coarser (dissolved/buffered bins, not individual points) but this
+    is the same geojson app.py itself draws for a clicked survey."""
+    row = load_bathym_fixed().set_index("file").loc[file]
+    survey_id = file.replace("_SurveyPoint.gpkg", "")
+    poly_path = DEPTH_POLY_DIR / f"{survey_id}_depth_polygons.geojson"
+    gdf = gpd.read_file(poly_path)  # EPSG:4326
+    gdf_utm = gdf.to_crs(UTM_CRS)
     return row, gdf_utm
 
 
@@ -199,6 +261,21 @@ def compute_auto_risk_level(nav_outline_utm, points_utm, threshold_ft):
     if inside.empty:
         return "low"
     return "medium" if (inside["depth_ft"] <= threshold_ft).any() else "low"
+
+
+def compute_auto_risk_level_polygons(nav_outline_utm, polys_utm, threshold_ft):
+    """Same idea as compute_auto_risk_level but for depth-bin polygons instead of
+    raw points: "medium" if any depth bin overlapping the nav-path outline could
+    contain water shallower than threshold_ft (its lower bound is below threshold,
+    or it's the unbounded "<5 ft" bin), else "low". Approximate since a bin is a
+    range, not an exact depth -- same "never suggests high" caveat as the point version."""
+    if nav_outline_utm is None or nav_outline_utm.is_empty:
+        return "low"
+    inside = polys_utm[polys_utm.geometry.intersects(nav_outline_utm)]
+    if inside.empty:
+        return "low"
+    shallow = inside["depth_bin"].map(lambda label: BIN_LOWER.get(label) is None or BIN_LOWER[label] < threshold_ft)
+    return "medium" if shallow.any() else "low"
 
 
 def weighted_bathym_mean(gdf_utm, flip_sign):
@@ -294,6 +371,51 @@ def build_survey_figure(points_utm, nav_outline_utm, threshold_ft, center, probl
     return fig
 
 
+def build_survey_figure_polygons(polys_utm, nav_outline_utm, center, problem_point=None, uirevision=None):
+    """Same idea as build_survey_figure, but draws the already-generated depth-bin
+    polygons (filled, same style as app.py's click-through view) instead of raw
+    points -- used in --mode polygons where the raw gpkg no longer exists."""
+    polys_4326 = polys_utm.to_crs(4326)
+    order = polys_4326["depth_bin"].map(lambda l: BIN_ORDER.get(l, 999))
+    polys_4326 = polys_4326.iloc[order.sort_values().index]
+
+    fig = go.Figure()
+    for _, r in polys_4326.iterrows():
+        label = r["depth_bin"]
+        color = DEPTH_POLY_COLORS.get(label, "#888888")
+        lons, lats = _geom_to_lonlat(r.geometry)
+        fig.add_trace(go.Scattermap(
+            lon=lons, lat=lats, mode="lines", fill="toself",
+            fillcolor=color, line=dict(width=0), opacity=0.75,
+            hoverinfo="text", hovertext=label, name=label,
+        ))
+    if nav_outline_utm is not None and not nav_outline_utm.is_empty:
+        outline_4326 = gpd.GeoSeries([nav_outline_utm], crs=UTM_CRS).to_crs(4326).iloc[0]
+        lons_o, lats_o = _geom_to_lonlat(outline_4326)
+        fig.add_trace(go.Scattermap(
+            lon=lons_o, lat=lats_o, mode="lines",
+            line=dict(width=2, color="#ffffff"),
+            name="nav-path outline", hoverinfo="skip", showlegend=False,
+        ))
+    if problem_point is not None:
+        fig.add_trace(go.Scattermap(
+            lon=[problem_point["lon"]], lat=[problem_point["lat"]], mode="markers",
+            marker=dict(size=20, color="#000000", symbol="star"),
+            name="problem point", hoverinfo="skip", showlegend=False,
+        ))
+    fig.update_layout(
+        map=dict(style="carto-darkmatter", zoom=13, center=center, uirevision=uirevision),
+        margin=dict(l=0, r=0, t=0, b=0),
+        showlegend=True,
+        legend=dict(
+            x=0.02, y=0.98, xanchor="left", yanchor="top",
+            bgcolor="rgba(0,0,0,0.55)", font=dict(color="white", size=10),
+            title=dict(text="Depth", font=dict(size=11, color="white")),
+        ),
+    )
+    return fig
+
+
 # ---------------- APP ----------------
 app = Dash(__name__)
 
@@ -334,7 +456,8 @@ def _duplicate_warning(row, df_all):
     desc = "; ".join(parts) if parts else ", ".join(match_files)
     return html.Span(f"⚠ Possible duplicate of: {desc}", style=DUPLICATE_WARNING_STYLE)
 
-initial_pending = get_pending_files()
+initial_pending = get_pending_files() if MODE == "points" else get_requeue_files(YEAR)
+_HIDDEN = {"display": "none"}
 
 app.layout = html.Div(
     style={"font-family": "Arial, sans-serif", "padding": "12px"},
@@ -343,9 +466,19 @@ app.layout = html.Div(
         dcc.Store(id="index-store", data=0),
         dcc.Store(id="problem-point-store", data=None),
 
+        html.H3(
+            f"Re-reviewing {YEAR} surveys (from DepthPolygons, no raw gpkg) -- risk only, "
+            "no reject/flip-sign in this mode" if MODE == "polygons" else "",
+            style={"color": "#7a5b00"} if MODE == "polygons" else {"display": "none"},
+        ),
         html.H3(id="queue-status"),
         html.Div(id="survey-header", style={"margin-bottom": "10px"}),
         html.Div(
+            "Click on the survey map (right) to mark roughly where the problem is -- it'll "
+            "snap to the nearest depth-bin polygon vertex, not an exact survey point -- if "
+            "approved as medium or high risk, that point (instead of the survey's overall "
+            "center) is what shows up as the dot on the live map."
+            if MODE == "polygons" else
             "Click a point on the survey map (right) to mark exactly where the problem "
             "is -- if the survey is approved as medium or high risk, that point (instead "
             "of the survey's overall center) is what shows up as the dot on the live map.",
@@ -393,13 +526,15 @@ app.layout = html.Div(
                     id="flip-sign-checkbox",
                     options=[{"label": " Flip sign (preview)", "value": "flip"}],
                     value=[],
+                    style=_HIDDEN if MODE == "polygons" else {},
                 ),
 
                 html.Button("Clear problem point", id="clear-point-btn", n_clicks=0, style={"padding": "8px 16px"}),
                 html.Button("Skip", id="skip-btn", n_clicks=0, style={"padding": "8px 16px"}),
                 html.Button("Reject & Next", id="reject-btn", n_clicks=0,
-                            style={"padding": "8px 16px", "background": "#a50026", "color": "white", "border": "none"}),
-                html.Button("Approve & Next", id="approve-btn", n_clicks=0,
+                            style={**{"padding": "8px 16px", "background": "#a50026", "color": "white", "border": "none"},
+                                   **(_HIDDEN if MODE == "polygons" else {})}),
+                html.Button("Save risk & Next" if MODE == "polygons" else "Approve & Next", id="approve-btn", n_clicks=0,
                             style={"padding": "8px 16px", "background": "#2166ac", "color": "white", "border": "none"}),
             ],
         ),
@@ -433,32 +568,57 @@ def recompute(pending, index, percentile, threshold, flip_values, problem_point)
     flip_sign = "flip" in (flip_values or [])
     threshold = DEFAULT_DEPTH_THRESHOLD if threshold is None else float(threshold)
 
-    row, points_utm = load_survey_points(file, flip_sign)
-    local_ais = local_corridor_subset(points_utm)
-    nav_outline_utm = compute_nav_outline(local_ais, percentile)
-    auto_level = compute_auto_risk_level(nav_outline_utm, points_utm, threshold)
+    if MODE == "polygons":
+        row, polys_utm = load_survey_polygons(file)
+        local_ais = local_corridor_subset(polys_utm)
+        nav_outline_utm = compute_nav_outline(local_ais, percentile)
+        auto_level = compute_auto_risk_level_polygons(nav_outline_utm, polys_utm, threshold)
 
-    # centroid of a point-union is just the mean of the points -- computing it this way
-    # instead of union_all().centroid avoids GEOS dissolving potentially millions of
-    # points into one geometry, which is impractically slow for the largest surveys
-    center_utm = Point(points_utm.geometry.x.mean(), points_utm.geometry.y.mean())
-    center_pt = gpd.GeoSeries([center_utm], crs=UTM_CRS).to_crs(4326).iloc[0]
-    center = dict(lat=center_pt.y, lon=center_pt.x)
+        minx, miny, maxx, maxy = polys_utm.total_bounds
+        center_utm = Point((minx + maxx) / 2, (miny + maxy) / 2)
+        center_pt = gpd.GeoSeries([center_utm], crs=UTM_CRS).to_crs(4326).iloc[0]
+        center = dict(lat=center_pt.y, lon=center_pt.x)
 
-    # uirevision keyed to the file: keeps the operator's current pan/zoom when the
-    # figure is just rebuilt to add the problem-point marker or reflect a slider
-    # tweak, but resets the view when moving on to a different survey
-    ais_fig = build_ais_figure(local_ais, nav_outline_utm, center, uirevision=file)
-    survey_fig = build_survey_figure(points_utm, nav_outline_utm, threshold, center, problem_point, uirevision=file)
+        ais_fig = build_ais_figure(local_ais, nav_outline_utm, center, uirevision=file)
+        survey_fig = build_survey_figure_polygons(polys_utm, nav_outline_utm, center, problem_point, uirevision=file)
 
-    badge_style = BADGE_BY_LEVEL[auto_level]
-    header_spans = [
-        html.Span(f"{file}", style={"font-weight": "bold", "margin-right": "14px"}),
-        html.Span(f"date: {row['date']}", style={"margin-right": "14px"}),
-        html.Span(f"stored bathym_mean: {row['bathym_mean']:.2f}, depth: {row['depth']:.2f} ft", style={"margin-right": "14px"}),
-        html.Span(f"local depth range: {points_utm['depth_ft'].min():.1f}–{points_utm['depth_ft'].max():.1f} ft", style={"margin-right": "14px"}),
-        html.Span(f"auto suggestion: {auto_level}", style=badge_style),
-    ]
+        badge_style = BADGE_BY_LEVEL[auto_level]
+        current_risk = row.get("at_risk")
+        header_spans = [
+            html.Span(f"{file}", style={"font-weight": "bold", "margin-right": "14px"}),
+            html.Span(f"date: {row['date']}", style={"margin-right": "14px"}),
+            html.Span(f"stored bathym_mean: {row['bathym_mean']:.2f}, depth: {row['depth']:.2f} ft", style={"margin-right": "14px"}),
+            html.Span(f"depth bins present: {bin_range_text(polys_utm['depth_bin'].unique())}", style={"margin-right": "14px"}),
+            html.Span(f"current at_risk: {current_risk}", style={"margin-right": "14px", "font-style": "italic"}),
+            html.Span(f"auto suggestion: {auto_level}", style=badge_style),
+        ]
+    else:
+        row, points_utm = load_survey_points(file, flip_sign)
+        local_ais = local_corridor_subset(points_utm)
+        nav_outline_utm = compute_nav_outline(local_ais, percentile)
+        auto_level = compute_auto_risk_level(nav_outline_utm, points_utm, threshold)
+
+        # centroid of a point-union is just the mean of the points -- computing it this way
+        # instead of union_all().centroid avoids GEOS dissolving potentially millions of
+        # points into one geometry, which is impractically slow for the largest surveys
+        center_utm = Point(points_utm.geometry.x.mean(), points_utm.geometry.y.mean())
+        center_pt = gpd.GeoSeries([center_utm], crs=UTM_CRS).to_crs(4326).iloc[0]
+        center = dict(lat=center_pt.y, lon=center_pt.x)
+
+        # uirevision keyed to the file: keeps the operator's current pan/zoom when the
+        # figure is just rebuilt to add the problem-point marker or reflect a slider
+        # tweak, but resets the view when moving on to a different survey
+        ais_fig = build_ais_figure(local_ais, nav_outline_utm, center, uirevision=file)
+        survey_fig = build_survey_figure(points_utm, nav_outline_utm, threshold, center, problem_point, uirevision=file)
+
+        badge_style = BADGE_BY_LEVEL[auto_level]
+        header_spans = [
+            html.Span(f"{file}", style={"font-weight": "bold", "margin-right": "14px"}),
+            html.Span(f"date: {row['date']}", style={"margin-right": "14px"}),
+            html.Span(f"stored bathym_mean: {row['bathym_mean']:.2f}, depth: {row['depth']:.2f} ft", style={"margin-right": "14px"}),
+            html.Span(f"local depth range: {points_utm['depth_ft'].min():.1f}–{points_utm['depth_ft'].max():.1f} ft", style={"margin-right": "14px"}),
+            html.Span(f"auto suggestion: {auto_level}", style=badge_style),
+        ]
     dup_warning = _duplicate_warning(row, load_bathym_fixed())
     if dup_warning is not None:
         header_spans.append(dup_warning)
@@ -468,10 +628,15 @@ def recompute(pending, index, percentile, threshold, flip_values, problem_point)
             style={"margin-left": "14px", "font-style": "italic", "color": "#a50026"},
         ))
     header = html.Div(header_spans)
-    status = f"Survey {index + 1} of {len(pending)} pending"
+    status = (f"Survey {index + 1} of {len(pending)} to re-review ({YEAR})" if MODE == "polygons"
+              else f"Survey {index + 1} of {len(pending)} pending")
 
     triggered = ctx.triggered_id
-    override_value = auto_level if triggered in ("pending-store", "index-store", None) else no_update
+    # in polygon re-review mode, start from the survey's existing at_risk value rather
+    # than the freshly-computed auto suggestion, since it's already been reviewed once
+    current_risk = row.get("at_risk")
+    default_risk = current_risk if MODE == "polygons" and current_risk in ("low", "medium", "high") else auto_level
+    override_value = default_risk if triggered in ("pending-store", "index-store", None) else no_update
     return ais_fig, survey_fig, header, status, override_value
 
 
@@ -524,6 +689,9 @@ def reject_survey(n_clicks, pending, index):
     map, never re-queued for review) and delete its raw gpkg, since nothing
     downstream needs it once it's rejected. The row stays in bathym_fixed.csv
     as a record of surveys that were read in but deliberately not posted."""
+    if MODE == "polygons":
+        return no_update, no_update, "Reject is disabled in --mode polygons re-review (survey is already live)."
+
     if not pending:
         return pending, index, "Nothing to reject."
 
@@ -562,12 +730,9 @@ def approve_survey(n_clicks, pending, index, percentile, threshold, flip_values,
 
     index = index % len(pending)
     file = pending[index]
-    flip_sign = "flip" in (flip_values or [])
 
     df = load_bathym_fixed()
     mask = df["file"] == file
-    row = df.loc[mask].iloc[0]
-    water_elev = float(row["water_elev"])
 
     # an all-blank at_risk/problem_lon/problem_lat column round-trips through CSV as
     # NaN/float64 (compute_bathym_stats.py writes "" for new rows), which then rejects
@@ -576,6 +741,30 @@ def approve_survey(n_clicks, pending, index, percentile, threshold, flip_values,
         if col not in df.columns:
             df[col] = None
         df[col] = df[col].astype(object)
+
+    if MODE == "polygons":
+        # no raw gpkg left to flip/repatch and confirmed is already "yes" -- just
+        # update the risk classification (and problem point) for this survey
+        df.loc[mask, "at_risk"] = risk_value
+        if risk_value != "low" and problem_point is not None:
+            df.loc[mask, "problem_lon"] = problem_point["lon"]
+            df.loc[mask, "problem_lat"] = problem_point["lat"]
+        else:
+            df.loc[mask, "problem_lon"] = None
+            df.loc[mask, "problem_lat"] = None
+        df.to_csv(BATHYM_FIXED_FILE, index=False)
+
+        # confirmed stays "yes" for this file even after saving, so re-deriving the
+        # queue from the CSV (like the points-mode branch does) wouldn't drop it --
+        # just remove it from the in-memory queue for this session instead
+        new_pending = [f for f in pending if f != file]
+        new_index = min(index, max(len(new_pending) - 1, 0))
+        message = f"Saved {file} -> {risk_value}." if new_pending else "Saved. No surveys left to re-review."
+        return new_pending, new_index, message
+
+    row = df.loc[mask].iloc[0]
+    water_elev = float(row["water_elev"])
+    flip_sign = "flip" in (flip_values or [])
 
     if flip_sign:
         gpkg_path = NAVD88_DIR / file
@@ -607,4 +796,6 @@ def approve_survey(n_clicks, pending, index, percentile, threshold, flip_values,
 
 
 if __name__ == "__main__":
-    app.run(debug=True, host="0.0.0.0", port=8060)
+    # dev_tools_ui off: the devtools bar (error badge + "update available" check)
+    # pins itself to the bottom of the page and covers the risk-level/approve controls
+    app.run(debug=True, dev_tools_ui=False, host="0.0.0.0", port=8060)
