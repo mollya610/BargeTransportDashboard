@@ -13,6 +13,10 @@ update_bathym/data/ActualDepthFiles/
 update_bathym/data/OtherDatumFiles/
 update_bathym/data/raw_xyz/
 
+# surveys set aside as too large to process (e.g. multibeam gdb/gpkg pairs)
+# often exceed GitHub's 100MB file limit -- keep these local-only
+update_bathym/data/OversizedSkipped/
+
 # NAVD88Files/ is committed on purpose: review_surveys.py needs the raw gpkg
 # locally to review a survey before it's confirmed. make_depth_polygons.py
 # deletes each file once its polygon is generated, so this shouldn't grow
