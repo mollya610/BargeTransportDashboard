@@ -6,6 +6,7 @@ geopandas
 shapely
 requests
 openpyxl
+xlrd
 pyproj
 pdfplumber
 Pillow

@@ -47,9 +47,20 @@ jobs:
       - name: Fetch river stage readings
         run: python fetch_stage.py
 
-      # ── Barge rates / corn / soy prices ──────────────────────────────────────
+      # ── Barge rates / corn / soy prices / Dec-corn & Nov-soy futures ─────────
       - name: Fetch barge rate and price data
+        env:
+          MARS_API_KEY: ${{ secrets.MARS_API_KEY }}
         run: python fetch_market_data.py
+
+      # ── Barge demand indicator: WASDE production estimate + NASS history ────
+      - name: Fetch latest WASDE production estimate
+        run: python fetch_wasde.py
+
+      - name: Fetch historical grain production (NASS QuickStats)
+        env:
+          NASS_API_KEY: ${{ secrets.NASS_API_KEY }}
+        run: python fetch_grain_production.py
 
       # ── Detect whether anything actually changed ──────────────────────────────
       - name: Stage pipeline outputs
@@ -66,7 +77,10 @@ jobs:
             river_stage_history.csv \
             barge_rates_history.csv \
             corn_price_history.csv \
-            soy_price_history.csv 2>/dev/null || true
+            soy_price_history.csv \
+            futures_dec_nov_history.csv \
+            wasde_production_estimate.csv \
+            grain_production_history.csv 2>/dev/null || true
           if git diff --cached --quiet; then
             echo "new_data=false" >> "$GITHUB_OUTPUT"
             echo "Nothing changed — no commit needed."

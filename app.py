@@ -1,4 +1,5 @@
 import os
+import re
 import glob
 import json
 import textwrap
@@ -176,7 +177,10 @@ RISK_BINS = [
 ]
 
 # the workbook uses short river codes rather than the full names in the mile-marker table
-RIVER_CODE_MAP = {"LMR": "MISSISSIPPI-LO", "UMR": "MISSISSIPPI-UP", "ARK": "ARKANSAS"}
+RIVER_CODE_MAP = {
+    "LMR": "MISSISSIPPI-LO", "AHP": "MISSISSIPPI-LO", "UMR": "MISSISSIPPI-UP",
+    "ARK": "ARKANSAS", "RED": "RED", "WHITE": "WHITE", "ATCH": "ATCHAFALAY",
+}
 
 # River stage gauge locations and data sources
 # St. Louis: USGS NWIS 07010000 (confirmed, correct NWS-equivalent datum)
@@ -213,6 +217,45 @@ mile_lookup = (
 # ordered points per river, used to draw a smoothed range indicator between two mile
 # markers instead of a single dot
 river_mile_points = mile_lookup.reset_index().sort_values(["RIVER_NAME", "MILE"])
+
+
+def _interp_mile_lonlat(river_name, mile):
+    """Lon/lat for a (possibly fractional) mile marker, linearly interpolated between
+    the nearest surveyed mile points on either side -- e.g. MM 751.2 lands 1/5 of the
+    way from the MM 751 point to the MM 752 point, rather than snapping to one of them."""
+    if pd.isna(mile):
+        return None
+    sub = river_mile_points[river_mile_points["RIVER_NAME"] == river_name]
+    if sub.empty:
+        return None
+    below = sub[sub["MILE"] <= mile]
+    above = sub[sub["MILE"] >= mile]
+    if below.empty or above.empty:
+        row = sub.loc[(sub["MILE"] - mile).abs().idxmin()]
+        return row["LON"], row["LAT"]
+    lo = below.loc[below["MILE"].idxmax()]
+    hi = above.loc[above["MILE"].idxmin()]
+    if lo["MILE"] == hi["MILE"]:
+        return lo["LON"], lo["LAT"]
+    frac = (mile - lo["MILE"]) / (hi["MILE"] - lo["MILE"])
+    return lo["LON"] + frac * (hi["LON"] - lo["LON"]), lo["LAT"] + frac * (hi["LAT"] - lo["LAT"])
+
+
+def _mile_brackets(river_name, mile):
+    """The two surveyed mile-marker points straddling `mile`, for the faint reference
+    lines shown on click. If `mile` lands exactly on a surveyed point, steps out to the
+    next point on each side instead of returning the same point twice."""
+    if pd.isna(mile):
+        return None
+    sub = river_mile_points[river_mile_points["RIVER_NAME"] == river_name]
+    if sub.empty:
+        return None
+    below = sub[sub["MILE"] < mile]
+    above = sub[sub["MILE"] > mile]
+    if below.empty or above.empty:
+        return None
+    return below.loc[below["MILE"].idxmax()], above.loc[above["MILE"].idxmin()]
+
 
 notices = pd.concat(
     [pd.read_excel(f) for f in sorted(glob.glob("notices_*.xlsx"))],
@@ -270,6 +313,42 @@ notices = notices.merge(mile_lookup_flat, on=["river_name", "mile_marker_round"]
 notices["lat"] = notices["lat"].fillna(notices["lat_lookup"])
 notices["lon"] = notices["lon"].fillna(notices["lon_lookup"])
 notices = notices.drop(columns=["lat_lookup", "lon_lookup"])
+
+# historical shoaling notices (2021-2025), backfilled once via
+# notice_to_mariners/fetch_shoaling_history.py and manually reviewed -- separate from
+# the live notices_<year>.xlsx pipeline above (which only tracks 2026 onward), merged
+# in here so it renders through the same map/hover/click code as current notices
+_hist_shoaling_csv = Path("notice_to_mariners/data/shoaling_notices_2021_2025DONE.csv")
+if _hist_shoaling_csv.exists():
+    hist_shoaling = pd.read_csv(_hist_shoaling_csv)
+    hist_shoaling = hist_shoaling[hist_shoaling["confirmed"].fillna("").str.upper() == "Y"]
+    hist_shoaling["date_published"] = pd.to_datetime(hist_shoaling["date"])
+    hist_shoaling["year"] = hist_shoaling["date_published"].dt.year
+    hist_shoaling["date_str"] = hist_shoaling["date_published"].dt.strftime("%Y-%m-%d")
+    hist_shoaling["category"] = "shoaling"
+    hist_shoaling["is_active_flag"] = False
+    hist_shoaling["instructions"] = np.nan
+    hist_shoaling["full_memo"] = hist_shoaling["memo"]
+    # river is almost always a clean abbreviation ("LMR"), but a couple of rows picked up
+    # stray free text during manual review -- pull a known abbreviation out of it instead
+    # of trusting the raw field, defaulting to LMR (the river nearly every row is on)
+    _river_abbr_re = re.compile(r"\b(LMR|UMR|AHP|ARK|RED|WHITE|ATCH)\b")
+    hist_shoaling["river_abbr"] = hist_shoaling["river"].astype(str).apply(
+        lambda s: (m.group(1) if (m := _river_abbr_re.search(s)) else "LMR")
+    )
+    hist_shoaling["river_name"] = hist_shoaling["river_abbr"].map(RIVER_CODE_MAP)
+    hist_shoaling["mm_low"] = hist_shoaling[["mm1", "mm2"]].min(axis=1)
+    hist_shoaling["mm_high"] = hist_shoaling[["mm1", "mm2"]].max(axis=1)
+    hist_shoaling["mm_label"] = hist_shoaling.apply(_format_mm, axis=1)
+    hist_shoaling["mid_mile"] = hist_shoaling[["mm_low", "mm_high"]].mean(axis=1)
+    hist_shoaling["location_details"] = hist_shoaling["location_description"]
+    hist_shoaling["location_line"] = hist_shoaling.apply(_location_line, axis=1)
+    # place each notice at its exact fractional mile marker (see _interp_mile_lonlat)
+    # instead of snapping to the nearest whole mile like the live notices pipeline does
+    _lonlat = hist_shoaling.apply(lambda r: _interp_mile_lonlat(r["river_name"], r["mid_mile"]), axis=1)
+    hist_shoaling["lon"] = [ll[0] if ll else np.nan for ll in _lonlat]
+    hist_shoaling["lat"] = [ll[1] if ll else np.nan for ll in _lonlat]
+    notices = pd.concat([notices, hist_shoaling], ignore_index=True)
 
 
 def _smooth_path(lons, lats, window=5):
@@ -575,6 +654,43 @@ def _geom_to_lonlat(geom):
         lons.append(None)
         lats.append(None)
     return lons, lats
+
+
+# AIS-derived dredge activity (2021-2024) -- distinct from the manually logged USACE
+# notices above. dredge_events_2021_2025 shapefile has one row per year, each a
+# MultiPolygon of that year's individual dredge-event footprints aggregated together;
+# the CSV has one row per individual event (vessel, MMSI, dates, duration) with a
+# center point, giving per-event hover detail the polygon layer doesn't have on its own.
+AIS_DREDGE_BY_YEAR = {}
+_ais_dredge_shp = Path("dredge_events_2021_2025/dredge_events_2021_2025.shp")
+_ais_dredge_csv = Path("dredge_events_2021_2025.csv")
+if _ais_dredge_shp.exists() and _ais_dredge_csv.exists():
+    _ais_poly = gpd.read_file(_ais_dredge_shp).to_crs(4326)
+    _ais_pts = pd.read_csv(_ais_dredge_csv)
+    for _, _row in _ais_poly.iterrows():
+        _year = int(_row["year"])
+        _lons, _lats = _geom_to_lonlat(_row.geometry)
+        _pts = _ais_pts[_ais_pts["year"] == _year]
+        _hovertexts = [
+            "<br>".join([
+                "<b><span style='font-size:16px'>Dredging Completed</span></b>",
+                f"<b><span style='font-size:16px'>"
+                f"{pd.to_datetime(p.start_date).strftime('%B %-d, %Y')} – "
+                f"{pd.to_datetime(p.end_date).strftime('%B %-d, %Y')}</span></b>",
+                p.vessel_name,
+                f"{p.duration_hrs:.1f} hours operating",
+            ])
+            for p in _pts.itertuples()
+        ]
+        AIS_DREDGE_BY_YEAR[_year] = {
+            "lons": _lons,
+            "lats": _lats,
+            "num_events": int(_row["num_events"]),
+            "num_polygons": len(_row.geometry.geoms) if _row.geometry.geom_type == "MultiPolygon" else 1,
+            "point_lons": _pts["center_lon"].tolist(),
+            "point_lats": _pts["center_lat"].tolist(),
+            "point_hovertext": _hovertexts,
+        }
 
 
 # Style constants for the notice click-detail box, floating over the map. Shared by all
@@ -1025,6 +1141,7 @@ app.layout = html.Div(
         dcc.Store(id="selected-survey-store", data=None),
         dcc.Store(id="selected-gage-store", data=None),
         dcc.Store(id="gage-freq-store", data=None),
+        dcc.Store(id="selected-shoaling-mile-store", data=None),
 
         ##################################
         # Map fills the full width; controls and plots panel float on top of it
@@ -1434,11 +1551,18 @@ def update_compare_years_barge_rate(hover_data):
     Input("year-slider", "value"),
     Input("layer-toggle", "value"),
     Input("selected-survey-store", "data"),
+    Input("selected-shoaling-mile-store", "data"),
 )
-def update_map(year, layers, selected_survey):
+def update_map(year, layers, selected_survey, selected_shoaling_mile):
 
     fig = go.Figure()
     df_b = bathy[bathy['year']==year]
+    # UM (Upper Mississippi) survey dots, north of Cairo, are only shown for 2026 onward
+    if year < 2026:
+        df_b = df_b[~df_b["survey_id"].str.startswith("UM")]
+    # only show surveys that have a depth-polygon file -- clicking a dot with none does
+    # nothing (see handle_survey_click), which reads as broken, so don't plot it at all
+    df_b = df_b[df_b["survey_id"].isin(DEPTH_POLY_FILES)]
     # hide the dot for whichever survey is currently showing its polygon overlay, but if it's
     # High risk, keep its marker up (faded) at the problem point so it's not lost under the
     # polygon -- only High needs this since its marker is otherwise invisible (opacity 0) with
@@ -1675,7 +1799,13 @@ def update_map(year, layers, selected_survey):
                 ]
                 if loc_line:
                     lines.append(loc_line)
-            customdatas.append([category, full_memo])
+            if category == "shoaling":
+                # river_name/mid_mile ride along so a click can look up the two
+                # surveyed mile markers straddling this notice and draw faint
+                # reference lines at them (see handle_shoaling_mile_click)
+                customdatas.append([category, full_memo, r.get("river_name"), r.get("mid_mile")])
+            else:
+                customdatas.append([category, full_memo])
             if instructions:
                 wrapped = "<br>".join(textwrap.wrap(instructions, width=55))
                 lines.append(f"<span style='font-size:11px'>{wrapped}</span>")
@@ -1709,7 +1839,7 @@ def update_map(year, layers, selected_survey):
                     ],
                 },
                 "type": "symbol",
-                "symbol": {"icon": "dredge-icon", "iconsize": 4},
+                "symbol": {"icon": "dredge-icon", "iconsize": 2.5},
             })
         else:
             fig.add_trace(
@@ -1796,6 +1926,32 @@ def update_map(year, layers, selected_survey):
             "symbol": {"icon": "gage-icon", "iconsize": 3},
         })
 
+    # faint reference lines at the two surveyed mile markers straddling a clicked
+    # shoaling notice, so its position relative to the mile markers is visible
+    if selected_shoaling_mile:
+        brackets = _mile_brackets(selected_shoaling_mile.get("river_name"), selected_shoaling_mile.get("mile"))
+        if brackets:
+            lo, hi = brackets
+            fig.add_trace(go.Scattermap(
+                lon=[lo["LON"], hi["LON"]],
+                lat=[lo["LAT"], hi["LAT"]],
+                mode="lines",
+                line=dict(color="rgba(255,255,255,0.4)", width=2),
+                hoverinfo="none",
+                showlegend=False,
+            ))
+            fig.add_trace(go.Scattermap(
+                lon=[lo["LON"], hi["LON"]],
+                lat=[lo["LAT"], hi["LAT"]],
+                mode="markers+text",
+                marker=dict(size=7, color="rgba(255,255,255,0.55)"),
+                text=[f"MM {lo['MILE']:g}", f"MM {hi['MILE']:g}"],
+                textposition="top center",
+                textfont=dict(size=11, color="rgba(255,255,255,0.7)"),
+                hoverinfo="none",
+                showlegend=False,
+            ))
+
     # depth polygon overlay for clicked survey
     if selected_survey:
         sid = selected_survey.get("survey_id", "")
@@ -1820,6 +1976,46 @@ def update_map(year, layers, selected_survey):
                     hoverlabel=dict(bgcolor=color, bordercolor=color, font=dict(color="white")),
                     showlegend=False,
                 ))
+
+    # AIS-derived dredge activity, shown alongside the manually logged dredging notices
+    # above when the "Dredging" layer is on. Only covers 2021-2024 -- other years show
+    # nothing here. Polygon layer is the year's aggregate footprint (hover = totals);
+    # point layer is one dot per individual event (hover = vessel/MMSI/dates/duration).
+    # Added after the survey depth-polygon overlay above so its outline draws on top
+    # instead of being covered when a survey is selected.
+    if "dredging" in layers and year in AIS_DREDGE_BY_YEAR:
+        ais = AIS_DREDGE_BY_YEAR[year]
+        fig.add_trace(go.Scattermap(
+            lon=ais["lons"],
+            lat=ais["lats"],
+            mode="lines",
+            line=dict(color="white", width=1.5),
+            name="Dredge Activity (AIS)",
+            legendrank=1.5,
+            hoverinfo="none",
+        ))
+        fig.add_trace(go.Scattermap(
+            lon=ais["point_lons"],
+            lat=ais["point_lats"],
+            mode="markers",
+            marker=dict(size=20, color=CATEGORY_COLORS["dredging"], opacity=0),
+            name="Dredge Events (AIS)",
+            showlegend=False,
+            hoverinfo="text",
+            hovertext=ais["point_hovertext"],
+        ))
+        icon_layers.append({
+            "sourcetype": "geojson",
+            "source": {
+                "type": "FeatureCollection",
+                "features": [
+                    {"type": "Feature", "geometry": {"type": "Point", "coordinates": [lon, lat]}}
+                    for lon, lat in zip(ais["point_lons"], ais["point_lats"])
+                ],
+            },
+            "type": "symbol",
+            "symbol": {"icon": "dredge-icon", "iconsize": 2.5},
+        })
 
     # map layout
     fig.update_layout(
@@ -1859,6 +2055,32 @@ def handle_notice_click(click_data, n_close):
 
 
 @app.callback(
+    Output("selected-shoaling-mile-store", "data"),
+    Input("map", "clickData"),
+    Input("notice-detail-close", "n_clicks"),
+    State("selected-shoaling-mile-store", "data"),
+    prevent_initial_call=True,
+)
+def handle_shoaling_mile_click(click_data, n_close, current):
+    """Clicking a shoaling notice shows faint reference lines at the two surveyed mile
+    markers straddling it (see _mile_brackets); clicking it again, clicking any other
+    marker, or closing the notice detail panel clears them."""
+    if dash.ctx.triggered_id == "notice-detail-close":
+        return None
+    if not click_data or not click_data.get("points"):
+        return dash.no_update
+    customdata = click_data["points"][0].get("customdata")
+    if not customdata or customdata[0] != "shoaling" or len(customdata) < 4:
+        return None
+    river_name, mile = customdata[2], customdata[3]
+    if not river_name or pd.isna(mile):
+        return None
+    if current and current.get("river_name") == river_name and current.get("mile") == mile:
+        return None
+    return {"river_name": river_name, "mile": mile}
+
+
+@app.callback(
     Output("notice-detail-box", "style"),
     Output("notice-detail-content", "children"),
     Input("notice-detail-store", "data")
@@ -1871,7 +2093,9 @@ def render_notice_detail(data):
     fields = data["fields"]
 
     if category in ("draft", "dredging", "shoaling"):
-        (full_memo,) = fields
+        # shoaling carries extra trailing fields (river_name, mid_mile) for the
+        # faint-mile-line click behavior -- only the memo text is shown here
+        full_memo = fields[0]
         children = [
             html.H3("USCG BROADCAST NOTICE TO MARINERS",
                     style={"margin": "0 0 10px 0", "color": CATEGORY_COLORS[category], "font-size": "18px"}),
