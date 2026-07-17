@@ -4,7 +4,7 @@ WORKDIR /app
 
 RUN apt-get update && apt-get install -y \
     curl \
-    libgeos-c1 \
+    libgeos-c1t64 \
     libproj25 \
     && rm -rf /var/lib/apt/lists/*
 
