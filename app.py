@@ -583,6 +583,7 @@ def _wrap_two_lines(text):
 
 app = dash.Dash(__name__)
 app.title = "Grain Transportation Conditions"
+server = app.server
 app.index_string = """
 <!DOCTYPE html>
 <html>
