@@ -9,6 +9,7 @@ from dash import dcc, html, Input, Output, State
 import geopandas as gpd
 import plotly.graph_objects as go
 from shapely.ops import linemerge
+from shapely.ops import unary_union
 from datetime import date
 import numpy as np
 import pandas as pd
@@ -510,7 +511,8 @@ rivers = rivers.set_crs('EPSG:4326')
 rivers["geometry"] = rivers.simplify(0.001)
 
 mississippi = rivers[rivers["PNAME"] == "MISSISSIPPI R"]
-river_line = linemerge(mississippi.geometry.union_all())
+
+river_line = linemerge(unary_union(mississippi.geometry))
 x, y = river_line.xy
 river_lons_arr = np.array(list(x))
 river_lats_arr = np.array(list(y))
