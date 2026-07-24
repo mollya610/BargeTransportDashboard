@@ -530,7 +530,7 @@ def _build_river(shapefile_name, mm_name):
     ]
     if clipped.empty:
         return [], []
-    geom = linemerge(clipped.union_all())
+    geom = linemerge(unary_union(clipped.geometry))
     lines = list(geom.geoms) if geom.geom_type == "MultiLineString" else [geom]
     r_lons, r_lats = [], []
     for line in lines:
