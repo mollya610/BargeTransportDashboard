@@ -370,6 +370,9 @@ try:
     barge_rates = barge_rates.merge(barge_std,on='week_no',how='inner')
     barge_rates['plusone'] = barge_rates['avg_stlrate'] + barge_rates['std_stlrate']
     barge_rates['minusone'] = barge_rates['avg_stlrate'] - barge_rates['std_stlrate']
+    # merging on week_no clusters same-week-number rows together regardless of year,
+    # which breaks the chronological order go.Scatter's line-drawing relies on
+    barge_rates = barge_rates.sort_values('week').reset_index(drop=True)
 except Exception as e:
     print(f"Warning: could not load barge rate data ({e}). Freight rate chart will be empty.")
     barge_rates = pd.DataFrame(columns=['week','stlrate_per_ton','week_no','year','avg_stlrate','std_stlrate','plusone','minusone'])
@@ -390,6 +393,9 @@ try:
     corn_price = corn_price.merge(stdcorn,on='month',how='inner')
     corn_price['plusone'] = corn_price['avg_price'] + corn_price['std_price']
     corn_price['minusone'] = corn_price['avg_price'] - corn_price['std_price']
+    # merging on month clusters same-calendar-month rows together regardless of year,
+    # which breaks the chronological order go.Scatter's line-drawing relies on
+    corn_price = corn_price.sort_values('date').reset_index(drop=True)
 
     soy_price = pd.read_csv("soy_price_history.csv", parse_dates=["date"])
     soy_price['week_no'] = soy_price['date'].dt.isocalendar().week
@@ -401,6 +407,9 @@ try:
     soy_price = soy_price.merge(stdsoy,on='month',how='inner')
     soy_price['plusone'] = soy_price['avg_price'] + soy_price['std_price']
     soy_price['minusone'] = soy_price['avg_price'] - soy_price['std_price']
+    # merging on month clusters same-calendar-month rows together regardless of year,
+    # which breaks the chronological order go.Scatter's line-drawing relies on
+    soy_price = soy_price.sort_values('date').reset_index(drop=True)
 except Exception as e:
     print(f"Warning: could not load corn/soy price data ({e}). Price charts will be empty.")
     corn_price = pd.DataFrame(columns=['date','week_no','year','gulf_corn_price','month','avg_price','std_price','plusone','minusone'])
