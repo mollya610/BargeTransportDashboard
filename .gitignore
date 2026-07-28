@@ -2,6 +2,9 @@ __pycache__/
 *.pyc
 *.bak
 
+# local virtual environment
+.venv_run/
+
 # runtime-downloaded files
 freight_rates_southbound.xlsx
 price_spreads_futures_usda.xlsx
