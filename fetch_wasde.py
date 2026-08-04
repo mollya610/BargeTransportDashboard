@@ -12,6 +12,7 @@ estimate.
 Run from the GitHub Actions daily pipeline, alongside fetch_market_data.py.
 """
 import re
+import time
 from pathlib import Path
 
 import pandas as pd
@@ -23,10 +24,39 @@ OUT_CSV = Path("wasde_production_estimate.csv")
 
 HEADERS = {"User-Agent": "Mozilla/5.0"}
 
+MAX_RETRIES = 3
+RETRY_BACKOFF_SECONDS = 5
+
+
+def _get_with_retries(url):
+    """GET with retries on transient failures (5xx, timeouts, connection errors).
+
+    USDA's site has intermittently 502'd on the daily pipeline run; 4xx
+    errors are not retried since a retry won't fix a bad URL.
+    """
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            resp = requests.get(url, timeout=30, headers=HEADERS)
+            resp.raise_for_status()
+            return resp
+        except (requests.exceptions.HTTPError,
+                requests.exceptions.ConnectionError,
+                requests.exceptions.Timeout) as exc:
+            is_client_error = (
+                isinstance(exc, requests.exceptions.HTTPError)
+                and exc.response is not None
+                and exc.response.status_code < 500
+            )
+            if is_client_error or attempt == MAX_RETRIES:
+                raise
+            wait = RETRY_BACKOFF_SECONDS * attempt
+            print(f"  GET {url} failed ({exc}); retrying in {wait}s "
+                  f"(attempt {attempt}/{MAX_RETRIES})")
+            time.sleep(wait)
+
 
 def _latest_release_url():
-    resp = requests.get(PUBLICATION_URL, timeout=30, headers=HEADERS)
-    resp.raise_for_status()
+    resp = _get_with_retries(PUBLICATION_URL)
     hrefs = re.findall(r'href="([^"]*release-files[^"]*\.xls)"', resp.text)
     if not hrefs:
         raise ValueError("No WASDE .xls release links found on publication page")
@@ -35,8 +65,7 @@ def _latest_release_url():
 
 def _download_latest():
     url = _latest_release_url()
-    resp = requests.get(url, timeout=30, headers=HEADERS)
-    resp.raise_for_status()
+    resp = _get_with_retries(url)
     XLS_PATH.write_bytes(resp.content)
 
 
