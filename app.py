@@ -97,7 +97,7 @@ bathy["year"] = bathy["year"].astype(int)
 bathy["date_dt"] = pd.to_datetime(bathy["date"]).dt.tz_localize(None)
 
 years = sorted(bathy["year"].unique())
-years = [int(y) for y in years]
+years = [int(y) for y in years if int(y) >= 2021]
 
 bathy["at_risk_eff"] = bathy["at_risk"].fillna("low") if "at_risk" in bathy.columns else "low"
 
@@ -775,6 +775,8 @@ RIVER_PAGE_VISIBLE = {"display": "block"}
 RIVER_PAGE_HIDDEN = {"display": "none"}
 DEMAND_PAGE_VISIBLE = {"display": "block", "background": "white", "min-height": "92vh", "padding": "28px 40px"}
 DEMAND_PAGE_HIDDEN = {"display": "none"}
+ABOUT_PAGE_VISIBLE = {"display": "block", "background": "white", "min-height": "92vh", "padding": "28px 40px"}
+ABOUT_PAGE_HIDDEN = {"display": "none"}
 
 COMPARE_YEARS_TOGGLE_STYLE = {
     "background": "#2166ac", "color": "white", "border": "none",
@@ -800,7 +802,7 @@ NAV_LINK_BASE = {
 NAV_LINK_ACTIVE = {**NAV_LINK_BASE, "color": "white", "font-weight": "bold", "border-bottom": "2px solid white"}
 NAV_LINK_INACTIVE = {**NAV_LINK_BASE, "color": "rgba(255,255,255,0.65)", "font-weight": "normal", "border-bottom": "2px solid transparent"}
 
-SECTION_HEADER_STYLE = {"margin": "0 0 4px 0", "font-size": "22px", "color": "#1b3a5c", "font-family": "'DM Sans', sans-serif", "font-weight": 600}
+SECTION_HEADER_STYLE = {"margin": "0 0 4px 0", "font-size": "18px", "color": "#1b3a5c", "font-family": "'DM Sans', sans-serif", "font-weight": 600}
 SECTION_SUBTEXT_STYLE = {"margin": "0 0 10px 0", "font-size": "17px", "color": "#555", "font-family": "'DM Sans', sans-serif"}
 CAPTION_STYLE = {"margin-top": "0px", "font-size": "14px", "color": "#777", "font-style": "italic", "font-family": "'DM Sans', sans-serif"}
 
@@ -1140,6 +1142,12 @@ app.layout = html.Div(
                         "font-weight": 700,
                         "font-size": "26px", "letter-spacing": "1.5px",
                     }
+                ),
+                html.Div(
+                    style={"position": "absolute", "top": "50%", "left": "20px", "transform": "translateY(-50%)"},
+                    children=[
+                        html.Button("About", id="nav-about", n_clicks=0, style=NAV_LINK_INACTIVE),
+                    ]
                 ),
                 html.Div(
                     style={"position": "absolute", "top": "50%", "right": "20px", "transform": "translateY(-50%)"},
@@ -1488,6 +1496,56 @@ app.layout = html.Div(
                 ),
             ]
         ),
+
+        # About page -- full page, hidden until its nav link is clicked
+        html.Div(
+            id="about-page",
+            style=ABOUT_PAGE_HIDDEN,
+            children=[
+                html.H3(
+                    "About This Dashboard",
+                    style={
+                        "margin": "0 0 18px 0",
+                        "font-family": "'DM Sans', sans-serif",
+                        "font-weight": 700,
+                        "letter-spacing": "0.5px", "font-size": "24px", "color": "#1b3a5c",
+                    }
+                ),
+                html.Div(
+                    style={"max-width": "700px"},
+                    children=[
+                        html.Div(
+                            "This dashboard was built by Molly Alcorn, a PhD student at the University of "
+                            "North Carolina at Chapel Hill in the Department of Environmental Sciences and "
+                            "Engineering, researching at the Institute for Risk Management and Insurance "
+                            "Innovation. It's part of ongoing research into inland waterway grain "
+                            "transportation, built to visualize how river conditions and market forces "
+                            "shape barge shipping on the Mississippi River system.",
+                            style={**SECTION_SUBTEXT_STYLE, "margin-bottom": "18px"}
+                        ),
+                        html.Div(
+                            "It draws on publicly available data: river gage readings from the USGS, "
+                            "dredging and shoaling notices from the U.S. Army Corps of Engineers, grain "
+                            "production estimates from USDA WASDE reports, and barge freight rates and "
+                            "grain futures prices from public market data.",
+                            style={**SECTION_SUBTEXT_STYLE, "margin-bottom": "18px"}
+                        ),
+                        html.Div(
+                            "This is a research prototype, not an official or operational tool, and is "
+                            "provided for informational purposes only.",
+                            style={**SECTION_SUBTEXT_STYLE, "margin-bottom": "18px", "font-style": "italic", "color": "#777"}
+                        ),
+                        html.Div(
+                            [
+                                "Questions or feedback? ",
+                                html.A("malcor@unc.edu", href="mailto:malcor@unc.edu", style={"color": "#2166ac"}),
+                            ],
+                            style=SECTION_SUBTEXT_STYLE
+                        ),
+                    ]
+                ),
+            ]
+        ),
     ]
 )
 
@@ -1519,16 +1577,21 @@ def toggle_plots_panel(n_clicks, is_open):
 @app.callback(
     Output("river-page", "style"),
     Output("demand-page", "style"),
+    Output("about-page", "style"),
     Output("nav-river-conditions", "style"),
     Output("nav-barge-demand", "style"),
+    Output("nav-about", "style"),
     Input("nav-river-conditions", "n_clicks"),
     Input("nav-barge-demand", "n_clicks"),
+    Input("nav-about", "n_clicks"),
     prevent_initial_call=True
 )
-def toggle_top_level_page(river_clicks, demand_clicks):
+def toggle_top_level_page(river_clicks, demand_clicks, about_clicks):
     if dash.ctx.triggered_id == "nav-barge-demand":
-        return RIVER_PAGE_HIDDEN, DEMAND_PAGE_VISIBLE, NAV_LINK_INACTIVE, NAV_LINK_ACTIVE
-    return RIVER_PAGE_VISIBLE, DEMAND_PAGE_HIDDEN, NAV_LINK_ACTIVE, NAV_LINK_INACTIVE
+        return RIVER_PAGE_HIDDEN, DEMAND_PAGE_VISIBLE, ABOUT_PAGE_HIDDEN, NAV_LINK_INACTIVE, NAV_LINK_ACTIVE, NAV_LINK_INACTIVE
+    if dash.ctx.triggered_id == "nav-about":
+        return RIVER_PAGE_HIDDEN, DEMAND_PAGE_HIDDEN, ABOUT_PAGE_VISIBLE, NAV_LINK_INACTIVE, NAV_LINK_INACTIVE, NAV_LINK_ACTIVE
+    return RIVER_PAGE_VISIBLE, DEMAND_PAGE_HIDDEN, ABOUT_PAGE_HIDDEN, NAV_LINK_ACTIVE, NAV_LINK_INACTIVE, NAV_LINK_INACTIVE
 
 
 @app.callback(
@@ -2517,7 +2580,7 @@ def update_barge_rate_plot(year):
     fig.add_trace(
         go.Scatter(x=df52["week"],y=df52["minusone"],
             mode="lines",fill="tonexty",fillcolor="rgba(160,160,160,0.3)",
-            name="±1 SD",line=dict(width=0),hoverinfo="skip")
+            name="±1 SD",line=dict(width=0),hoverinfo="y",showlegend=False)
     )
     fig.update_layout(title=title,
         yaxis_title="$/ton",
@@ -2559,7 +2622,7 @@ def update_cornprice_plot(year):
     fig.add_trace(
         go.Scatter(x=df365["date"],y=df365["minusone"],
             mode="lines",fill="tonexty",fillcolor="rgba(160,160,160,0.3)",
-            name="±1 SD",line=dict(width=0),hoverinfo="skip")
+            name="±1 SD",line=dict(width=0),hoverinfo="y",showlegend=False)
     )
     fig.update_layout(title=title,
         yaxis_title="Price ($/bushel)",
@@ -2600,7 +2663,7 @@ def update_soyprice_plot(year):
     fig.add_trace(
         go.Scatter(x=df365["date"],y=df365["minusone"],
             mode="lines",fill="tonexty",fillcolor="rgba(160,160,160,0.3)",
-            name="±1 SD",line=dict(width=0),hoverinfo="skip")
+            name="±1 SD",line=dict(width=0),hoverinfo="y",showlegend=False)
     )
     fig.update_layout(title=title,
         yaxis_title="Price ($/bushel)",
