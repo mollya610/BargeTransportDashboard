@@ -600,7 +600,7 @@ app.index_string = """
         {%metas%}
         <title>{%title%}</title>
         {%favicon%}
-        <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&display=swap" rel="stylesheet">
+        <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@500;600;700&display=swap" rel="stylesheet">
         {%css%}
     </head>
     <body>
@@ -778,8 +778,9 @@ DEMAND_PAGE_HIDDEN = {"display": "none"}
 
 COMPARE_YEARS_TOGGLE_STYLE = {
     "background": "#2166ac", "color": "white", "border": "none",
-    "border-radius": "6px", "padding": "10px 20px", "font-size": "15px",
+    "border-radius": "8px", "padding": "16px 30px", "font-size": "20px",
     "cursor": "pointer", "margin-top": "10px",
+    "font-family": "'DM Sans', sans-serif", "font-weight": 600,
 }
 COMPARE_YEARS_BOX_HIDDEN = {"display": "none"}
 COMPARE_YEARS_BOX_VISIBLE = {
@@ -794,13 +795,14 @@ COMPARE_YEARS_BOX_VISIBLE = {
 NAV_LINK_BASE = {
     "background": "none", "border": "none", "cursor": "pointer",
     "font-size": "15px", "padding": "6px 2px", "margin-left": "24px",
+    "font-family": "'DM Sans', sans-serif",
 }
 NAV_LINK_ACTIVE = {**NAV_LINK_BASE, "color": "white", "font-weight": "bold", "border-bottom": "2px solid white"}
 NAV_LINK_INACTIVE = {**NAV_LINK_BASE, "color": "rgba(255,255,255,0.65)", "font-weight": "normal", "border-bottom": "2px solid transparent"}
 
-SECTION_HEADER_STYLE = {"margin": "0 0 4px 0", "font-size": "22px", "color": "#1b3a5c"}
-SECTION_SUBTEXT_STYLE = {"margin": "0 0 10px 0", "font-size": "17px", "color": "#555"}
-CAPTION_STYLE = {"margin-top": "0px", "font-size": "14px", "color": "#777", "font-style": "italic"}
+SECTION_HEADER_STYLE = {"margin": "0 0 4px 0", "font-size": "22px", "color": "#1b3a5c", "font-family": "'DM Sans', sans-serif", "font-weight": 600}
+SECTION_SUBTEXT_STYLE = {"margin": "0 0 10px 0", "font-size": "17px", "color": "#555", "font-family": "'DM Sans', sans-serif"}
+CAPTION_STYLE = {"margin-top": "0px", "font-size": "14px", "color": "#777", "font-style": "italic", "font-family": "'DM Sans', sans-serif"}
 
 CROP_COLORS = {"corn": "#006837", "soybean": "#f1a340"}
 
@@ -1134,7 +1136,8 @@ app.layout = html.Div(
                     "Grain Transportation Conditions",
                     style={
                         "margin": 0, "color": "white",
-                        "font-family": "'Bebas Neue', sans-serif",
+                        "font-family": "'DM Sans', sans-serif",
+                        "font-weight": 700,
                         "font-size": "26px", "letter-spacing": "1.5px",
                     }
                 ),
@@ -1421,9 +1424,9 @@ app.layout = html.Div(
                     id="plots-panel",
                     style=PLOTS_PANEL_CLOSED,
                     children=[
-                        dcc.Graph(id="barge-rate-plot", style={"height": "300px"}),
-                        dcc.Graph(id="cornprice-plot", style={"height": "300px"}),
-                        dcc.Graph(id="soyprice-plot", style={"height": "300px"})
+                        dcc.Graph(id="barge-rate-plot", style={"height": "300px"}, config={"displayModeBar": False}),
+                        dcc.Graph(id="cornprice-plot", style={"height": "300px"}, config={"displayModeBar": False}),
+                        dcc.Graph(id="soyprice-plot", style={"height": "300px"}, config={"displayModeBar": False})
                         # Additional plots can be added as more children
                     ]
                 )
@@ -1442,7 +1445,8 @@ app.layout = html.Div(
                     "Demand for Grain Barges is impacted by:",
                     style={
                         "margin": "0 0 18px 0",
-                        "font-family": "'Bebas Neue', sans-serif",
+                        "font-family": "'DM Sans', sans-serif",
+                        "font-weight": 700,
                         "letter-spacing": "0.5px", "font-size": "24px", "color": "#1b3a5c",
                     }
                 ),
@@ -2491,12 +2495,11 @@ def render_gage_panel(data):
 )
 def update_barge_rate_plot(year):
     # filter barge rates by year
-    if year == thisyear: 
+    if year == thisyear:
         df52 = barge_rates[(barge_rates["week"] >= start_date) &(barge_rates["week"] <= end_date)]
-        title = "STL to NOLA Barge Freight Rates: Past 52 Weeks"
-    else: 
+    else:
         df52 = barge_rates[barge_rates['year']==year]
-        title = f"STL to NOLA Barge Freight Rates: {year}"
+    title = "St. Louis to New Orleans Barge Rate"
 
     fig = go.Figure()
     fig.add_trace(
@@ -2534,12 +2537,11 @@ def update_barge_rate_plot(year):
 )
 def update_cornprice_plot(year):
     # filter barge rates by year
-    if year == thisyear: 
+    if year == thisyear:
         df365 = corn_price[(corn_price["date"] >= start_date) &(corn_price["date"] <= end_date)]
-        title = "Gulf Corn Price: Past 52 Weeks"
-    else: 
+    else:
         df365 = corn_price[corn_price['year']==year]
-        title = f"Gulf Corn Price: {year}"
+    title = "Gulf Corn Price"
 
     fig = go.Figure()
     fig.add_trace(
@@ -2576,12 +2578,11 @@ def update_cornprice_plot(year):
 )
 def update_soyprice_plot(year):
     # filter barge rates by year
-    if year == thisyear: 
+    if year == thisyear:
         df365 = soy_price[(soy_price["date"] >= start_date) &(soy_price["date"] <= end_date)]
-        title = "Gulf Soy Price: Past 52 Weeks"
-    else: 
+    else:
         df365 = soy_price[soy_price['year']==year]
-        title = f"Gulf Soy Price: {year}"
+    title = "Gulf Soy Price"
 
     fig = go.Figure()
     fig.add_trace(
