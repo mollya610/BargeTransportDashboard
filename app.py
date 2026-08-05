@@ -809,7 +809,7 @@ COMPARE_YEARS_BOX_VISIBLE = {
     "display": "block", "position": "fixed", "top": "50%", "left": "50%",
     "transform": "translate(-50%, -50%)", "zIndex": "1000",
     "border": "1px solid #b8d4ec", "border-radius": "8px",
-    "padding": "20px 24px", "background": "#f7fbfe",
+    "padding": "36px 24px 20px 24px", "background": "#f7fbfe",
     "box-shadow": "0 4px 24px rgba(0,0,0,0.35)",
     "max-height": "90vh", "overflow-y": "auto",
 }
@@ -1013,49 +1013,62 @@ def build_compare_years_fig(df):
     fig.add_hline(y=y_center, line_dash="dot", line_color="#bbb")
 
     fig.update_layout(
-        title="Grain Production vs. Demand Index by Year",
-        xaxis=dict(title="Grain Demand Index (Low → High)", showticklabels=False,
+        title=dict(text="<b>Grain Production vs Grain Prices</b>", font=dict(size=19)),
+        xaxis=dict(title="Grain Price Index", title_font=dict(size=15), showticklabels=False,
                     range=[x_center - x_half, x_center + x_half]),
-        yaxis=dict(title="Grain Production Index (Low → High)", showticklabels=False,
+        yaxis=dict(title="Grain Production Index", title_font=dict(size=15), showticklabels=False,
                     range=[y_center - y_half, y_center + y_half]),
         height=480,
-        width=600,
-        # legend sits to the right of the plot, outside the data area, so it can never overlap a dot
+        width=596,
+        # legend sits to the right of the plot, outside the data area, so it can never overlap a dot.
+        # r=150 is sized for the legend text itself (doesn't shrink with the plot), not the plot square.
         legend=dict(orientation="v", x=1.02, y=0.5, xanchor="left", yanchor="middle",
                      bgcolor="rgba(255,255,255,0.6)", bordercolor="black", borderwidth=1),
-        margin=dict(l=50, r=150, t=50, b=50),
+        margin=dict(l=40, r=156, t=40, b=40),
     )
     return fig
 
 
+# Week number doesn't mean anything to a reader on its own -- map the first week of each
+# month (using an arbitrary non-leap reference year, since ISO week numbering only depends
+# on day-of-week/day-of-year) to that month's abbreviation, so the x-axis reads as a rough
+# calendar instead of a raw week count.
+_month_starts = pd.date_range("2001-01-01", periods=12, freq="MS")
+MONTH_WEEK_TICKVALS = _month_starts.isocalendar()["week"].tolist()
+MONTH_WEEK_TICKTEXT = _month_starts.strftime("%b").tolist()
+
+
 def build_barge_rate_year_fig(year):
-    df_year = barge_rates[barge_rates["year"] == year]
+    # Years aren't aligned on calendar dates (a given week lands on different dates each
+    # year), so comparison uses ISO week number (week_no) as the shared x-axis instead.
     fig = go.Figure()
+    other_years = sorted(y for y in barge_rates["year"].unique() if y != year)
+    for i, other_year in enumerate(other_years):
+        df_other = barge_rates[barge_rates["year"] == other_year].sort_values("week_no")
+        fig.add_trace(go.Scatter(
+            x=df_other["week_no"], y=df_other["stlrate_per_ton"],
+            mode="lines", line=dict(width=1, color="#cccccc"),
+            name="Other years", legendgroup="other_years", showlegend=(i == 0),
+            legendrank=2, hoverinfo="skip",
+        ))
+    df_year = barge_rates[barge_rates["year"] == year].sort_values("week_no")
     fig.add_trace(go.Scatter(
-        x=df_year["week"], y=df_year["stlrate_per_ton"],
-        mode="lines", line=dict(width=2, color="#d95f0e"), name=str(year), showlegend=False,
-    ))
-    fig.add_trace(go.Scatter(
-        x=df_year["week"], y=df_year["avg_stlrate"],
-        mode="lines", line=dict(width=1.5, color="grey", dash="dash"), name="Mean",
-    ))
-    fig.add_trace(go.Scatter(
-        x=df_year["week"], y=df_year["plusone"],
-        mode="lines", line=dict(width=0), hoverinfo="skip", showlegend=False,
-    ))
-    fig.add_trace(go.Scatter(
-        x=df_year["week"], y=df_year["minusone"],
-        mode="lines", fill="tonexty", fillcolor="rgba(160,160,160,0.3)",
-        name="Typical range (75% of years)", line=dict(width=0), hoverinfo="skip",
+        x=df_year["week_no"], y=df_year["stlrate_per_ton"],
+        customdata=df_year["week"],
+        mode="lines", line=dict(width=2.5, color="#7b3fa0"), name=str(year), legendrank=1,
+        hovertemplate="%{customdata|%b %d, %Y}: $%{y:.2f}<extra></extra>",
     ))
     fig.update_layout(
-        title=dict(text=f"STL to NOLA Barge Freight Rates: {year}", font=dict(size=13)),
-        yaxis_title="$/ton",
-        height=180,
-        legend=dict(x=0.02, y=0.98, xanchor="left", yanchor="top", font=dict(size=10),
+        title=dict(text="<b>St Louis to New Orleans Spot Barge Rates</b>", font=dict(size=17)),
+        xaxis=dict(tickvals=MONTH_WEEK_TICKVALS, ticktext=MONTH_WEEK_TICKTEXT,
+                    automargin=False),
+        yaxis=dict(title="Barge Rate ($/ton)", automargin=False),
+        height=300,
+        width=596,
+        legend=dict(orientation="v", x=1.02, y=0.5, xanchor="left", yanchor="middle", font=dict(size=13),
                      bgcolor="rgba(255,255,255,0.6)", bordercolor="black", borderwidth=1),
-        margin=dict(l=45, r=15, t=30, b=30),
-        hovermode="x unified",
+        margin=dict(l=40, r=156, t=30, b=25),
+        hovermode="closest",
     )
     return fig
 
@@ -1063,8 +1076,9 @@ def build_barge_rate_year_fig(year):
 def build_barge_rate_placeholder_fig():
     fig = go.Figure()
     fig.update_layout(
-        height=180,
-        margin=dict(l=20, r=20, t=20, b=20),
+        height=300,
+        width=596,
+        margin=dict(l=40, r=156, t=15, b=15),
         xaxis=dict(visible=False),
         yaxis=dict(visible=False),
         annotations=[dict(
@@ -1153,32 +1167,26 @@ app.layout = html.Div(
         # Title bar
         html.Div(
             style={
-                "position": "relative",
-                "width": "100%",
-                "padding": "15px 0",
+                "display": "flex", "align-items": "center", "justify-content": "space-between",
+                "width": "100%", "box-sizing": "border-box",
+                "height": "55px", "padding": "0 20px",
                 "background": "#2166ac",
-                "text-align": "center",
             },
             children=[
                 html.H2(
                     "Grain Transportation Conditions",
                     style={
-                        "margin": 0, "color": "white",
+                        "margin": "0 0 0 30px", "color": "white",
                         "font-family": "'DM Sans', sans-serif",
                         "font-weight": 700,
-                        "font-size": "26px", "letter-spacing": "1.5px",
+                        "font-size": "30px", "letter-spacing": "1.5px",
                     }
                 ),
                 html.Div(
-                    style={"position": "absolute", "top": "50%", "left": "20px", "transform": "translateY(-50%)"},
+                    style={"display": "flex", "align-items": "center"},
                     children=[
                         html.Button("About", id="nav-about", n_clicks=0, style=NAV_LINK_INACTIVE),
-                    ]
-                ),
-                html.Div(
-                    style={"position": "absolute", "top": "50%", "right": "20px", "transform": "translateY(-50%)"},
-                    children=[
-                        html.Button("River Conditions", id="nav-river-conditions", n_clicks=0, style=NAV_LINK_ACTIVE),
+                        html.Button("Mississippi River Conditions", id="nav-river-conditions", n_clicks=0, style=NAV_LINK_ACTIVE),
                         html.Button("Barge Demand", id="nav-barge-demand", n_clicks=0, style=NAV_LINK_INACTIVE),
                     ]
                 ),
@@ -1203,7 +1211,7 @@ app.layout = html.Div(
             children=[
 
                 # Map, edge to edge
-                dcc.Graph(id="map", style={"height": "100%", "width": "100%"}),
+                dcc.Graph(id="map", style={"height": "100%", "width": "100%"}, config={"displayModeBar": False}),
 
                 # Welcome intro -- explains the map/site on first load, dismissed for the session
                 html.Div(id="welcome-backdrop", style=WELCOME_BACKDROP_VISIBLE),
@@ -1541,6 +1549,7 @@ app.layout = html.Div(
                             "✕", id="compare-years-close",
                             style={
                                 "position": "absolute", "top": "8px", "right": "10px",
+                                "zIndex": "10",
                                 "border": "none", "background": "none", "cursor": "pointer",
                                 "font-size": "18px", "color": "#888",
                             }
@@ -1554,7 +1563,15 @@ app.layout = html.Div(
                                 ),
                             ]
                         ),
-                        dcc.Graph(id="compare-years-barge-rate-plot", figure=_barge_rate_placeholder_fig, config={"displayModeBar": False}),
+                        html.Div(
+                            style={"display": "flex", "justify-content": "center"},
+                            children=[
+                                dcc.Graph(
+                                    id="compare-years-barge-rate-plot", figure=_barge_rate_placeholder_fig,
+                                    config={"displayModeBar": False},
+                                ),
+                            ]
+                        ),
                         # Space for Molly's own write-up on how to read this chart -- left blank on purpose.
                         html.Div(id="compare-years-explanation"),
                     ]
