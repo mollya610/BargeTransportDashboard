@@ -365,17 +365,19 @@ try:
     barge_rates['week_no']= barge_rates['week'].dt.isocalendar().week
     barge_rates['year'] = barge_rates['week'].dt.year
     barge_demand = barge_rates.groupby(['week_no'])['stlrate_per_ton'].mean().reset_index().rename(columns={'stlrate_per_ton':'avg_stlrate'})
-    barge_std = barge_rates.groupby(['week_no'])['stlrate_per_ton'].std().reset_index().rename(columns={'stlrate_per_ton':'std_stlrate'})
+    # middle-75% band (12.5th-87.5th percentile) is easier for a general audience to
+    # read than a standard-deviation band -- "most years fall in this range"
+    barge_p875 = barge_rates.groupby(['week_no'])['stlrate_per_ton'].quantile(0.875).reset_index().rename(columns={'stlrate_per_ton':'plusone'})
+    barge_p125 = barge_rates.groupby(['week_no'])['stlrate_per_ton'].quantile(0.125).reset_index().rename(columns={'stlrate_per_ton':'minusone'})
     barge_rates = barge_rates.merge(barge_demand,on='week_no',how='inner')
-    barge_rates = barge_rates.merge(barge_std,on='week_no',how='inner')
-    barge_rates['plusone'] = barge_rates['avg_stlrate'] + barge_rates['std_stlrate']
-    barge_rates['minusone'] = barge_rates['avg_stlrate'] - barge_rates['std_stlrate']
+    barge_rates = barge_rates.merge(barge_p875,on='week_no',how='inner')
+    barge_rates = barge_rates.merge(barge_p125,on='week_no',how='inner')
     # merging on week_no clusters same-week-number rows together regardless of year,
     # which breaks the chronological order go.Scatter's line-drawing relies on
     barge_rates = barge_rates.sort_values('week').reset_index(drop=True)
 except Exception as e:
     print(f"Warning: could not load barge rate data ({e}). Freight rate chart will be empty.")
-    barge_rates = pd.DataFrame(columns=['week','stlrate_per_ton','week_no','year','avg_stlrate','std_stlrate','plusone','minusone'])
+    barge_rates = pd.DataFrame(columns=['week','stlrate_per_ton','week_no','year','avg_stlrate','plusone','minusone'])
 
 end_date = barge_rates["week"].max() if not barge_rates.empty else pd.Timestamp.today()
 start_date = end_date - pd.Timedelta(weeks=52)
@@ -388,11 +390,13 @@ try:
     corn_price['year'] = corn_price['date'].dt.year
     corn_price['month'] = corn_price['date'].dt.month
     meancorn = corn_price.groupby(['month'])[['gulf_corn_price']].mean().reset_index().rename(columns={'gulf_corn_price':'avg_price'})
-    stdcorn = corn_price.groupby(['month'])[['gulf_corn_price']].std().reset_index().rename(columns={'gulf_corn_price':'std_price'})
+    # middle-75% band (12.5th-87.5th percentile) is easier for a general audience to
+    # read than a standard-deviation band -- "most years fall in this range"
+    p875corn = corn_price.groupby(['month'])[['gulf_corn_price']].quantile(0.875).reset_index().rename(columns={'gulf_corn_price':'plusone'})
+    p125corn = corn_price.groupby(['month'])[['gulf_corn_price']].quantile(0.125).reset_index().rename(columns={'gulf_corn_price':'minusone'})
     corn_price = corn_price.merge(meancorn,on='month',how='inner')
-    corn_price = corn_price.merge(stdcorn,on='month',how='inner')
-    corn_price['plusone'] = corn_price['avg_price'] + corn_price['std_price']
-    corn_price['minusone'] = corn_price['avg_price'] - corn_price['std_price']
+    corn_price = corn_price.merge(p875corn,on='month',how='inner')
+    corn_price = corn_price.merge(p125corn,on='month',how='inner')
     # merging on month clusters same-calendar-month rows together regardless of year,
     # which breaks the chronological order go.Scatter's line-drawing relies on
     corn_price = corn_price.sort_values('date').reset_index(drop=True)
@@ -402,18 +406,18 @@ try:
     soy_price['year'] = soy_price['date'].dt.year
     soy_price['month'] = soy_price['date'].dt.month
     meansoy = soy_price.groupby(['month'])[['gulf_soy_price']].mean().reset_index().rename(columns={'gulf_soy_price':'avg_price'})
-    stdsoy = soy_price.groupby(['month'])[['gulf_soy_price']].std().reset_index().rename(columns={'gulf_soy_price':'std_price'})
+    p875soy = soy_price.groupby(['month'])[['gulf_soy_price']].quantile(0.875).reset_index().rename(columns={'gulf_soy_price':'plusone'})
+    p125soy = soy_price.groupby(['month'])[['gulf_soy_price']].quantile(0.125).reset_index().rename(columns={'gulf_soy_price':'minusone'})
     soy_price = soy_price.merge(meansoy,on='month',how='inner')
-    soy_price = soy_price.merge(stdsoy,on='month',how='inner')
-    soy_price['plusone'] = soy_price['avg_price'] + soy_price['std_price']
-    soy_price['minusone'] = soy_price['avg_price'] - soy_price['std_price']
+    soy_price = soy_price.merge(p875soy,on='month',how='inner')
+    soy_price = soy_price.merge(p125soy,on='month',how='inner')
     # merging on month clusters same-calendar-month rows together regardless of year,
     # which breaks the chronological order go.Scatter's line-drawing relies on
     soy_price = soy_price.sort_values('date').reset_index(drop=True)
 except Exception as e:
     print(f"Warning: could not load corn/soy price data ({e}). Price charts will be empty.")
-    corn_price = pd.DataFrame(columns=['date','week_no','year','gulf_corn_price','month','avg_price','std_price','plusone','minusone'])
-    soy_price = pd.DataFrame(columns=['date','week_no','year','gulf_soy_price','month','avg_price','std_price','plusone','minusone'])
+    corn_price = pd.DataFrame(columns=['date','week_no','year','gulf_corn_price','month','avg_price','plusone','minusone'])
+    soy_price = pd.DataFrame(columns=['date','week_no','year','gulf_soy_price','month','avg_price','plusone','minusone'])
 
 # Barge Demand indicator: current-year WASDE production estimate (fetch_wasde.py)
 try:
@@ -768,6 +772,22 @@ GAGE_FREQ_VISIBLE = {
     "padding": "10px 40px 6px 14px",
     "font-family": "Arial, sans-serif",
 }
+# Welcome intro modal -- shown over the map on first load, dismissed with the ✕ and
+# never shown again for the rest of the session (no re-open trigger, unlike the other
+# detail boxes).
+WELCOME_BACKDROP_VISIBLE = {
+    "position": "absolute", "top": 0, "left": 0, "width": "100%", "height": "100%",
+    "background": "rgba(0,0,0,0.35)", "zIndex": "40",
+}
+WELCOME_BACKDROP_HIDDEN = {"display": "none"}
+WELCOME_BOX_VISIBLE = {
+    "position": "absolute", "top": "50%", "left": "50%", "transform": "translate(-50%, -50%)",
+    "zIndex": "41", "width": "480px", "max-width": "90%",
+    "background": "white", "padding": "26px 30px", "border-radius": "10px",
+    "box-shadow": "0 4px 24px rgba(0,0,0,0.4)", "font-family": "Arial, sans-serif",
+}
+WELCOME_BOX_HIDDEN = {"display": "none"}
+
 # Top-level pages -- clicking a header nav link switches which one is visible.
 # "River Conditions" (the map) is the default; "Barge Demand" is a full page, not
 # an overlay, so it gets the same amount of room as the map does.
@@ -959,20 +979,26 @@ def build_compare_years_fig(df):
     low_water = df[df["low_water"] & ~df["is_current_year"]]
     current = df[df["is_current_year"]]
 
+    # customdata is stored as strings, not numpers -- plotly silently drops customdata
+    # from click/hover events when it's a homogeneous numeric array (it gets encoded as a
+    # compact typed-array blob that Dash's click handler doesn't unpack per-point).
     fig.add_trace(go.Scatter(
-        x=normal["price_index"], y=normal["production_index"], customdata=normal[["year"]].values,
+        x=normal["price_index"], y=normal["production_index"],
+        customdata=normal["year"].astype(str).values.reshape(-1, 1),
         mode="markers", marker=dict(size=12, color="#8ea6bd"), name="Other years",
-        hovertemplate="%{customdata[0]}<extra></extra>",
+        hovertemplate="%{customdata[0]} (click to see barge rates for %{customdata[0]})<extra></extra>",
     ))
     fig.add_trace(go.Scatter(
-        x=low_water["price_index"], y=low_water["production_index"], customdata=low_water[["year"]].values,
+        x=low_water["price_index"], y=low_water["production_index"],
+        customdata=low_water["year"].astype(str).values.reshape(-1, 1),
         mode="markers", marker=dict(size=13, color="#d95f0e"), name="Low-water years",
-        hovertemplate="%{customdata[0]} (low-water year)<extra></extra>",
+        hovertemplate="%{customdata[0]} (low-water year)<br>(click to see barge rates for %{customdata[0]})<extra></extra>",
     ))
     fig.add_trace(go.Scatter(
-        x=current["price_index"], y=current["production_index"], customdata=current[["year"]].values,
+        x=current["price_index"], y=current["production_index"],
+        customdata=current["year"].astype(str).values.reshape(-1, 1),
         mode="markers", marker=dict(size=17, color="#1b3a5c", symbol="star"), name=f"{thisyear} (this year)",
-        hovertemplate="%{customdata[0]} (this year)<extra></extra>",
+        hovertemplate="%{customdata[0]} (this year)<br>(click to see barge rates for %{customdata[0]})<extra></extra>",
     ))
 
     # dividers at a neutral (z-score 0) demand index / production index split the plot
@@ -993,11 +1019,11 @@ def build_compare_years_fig(df):
         yaxis=dict(title="Grain Production Index (Low → High)", showticklabels=False,
                     range=[y_center - y_half, y_center + y_half]),
         height=480,
-        width=480,
-        # legend sits below the plot, outside the data area, so it can never overlap a dot
-        legend=dict(orientation="h", x=0.5, y=-0.12, xanchor="center", yanchor="top",
+        width=600,
+        # legend sits to the right of the plot, outside the data area, so it can never overlap a dot
+        legend=dict(orientation="v", x=1.02, y=0.5, xanchor="left", yanchor="middle",
                      bgcolor="rgba(255,255,255,0.6)", bordercolor="black", borderwidth=1),
-        margin=dict(l=50, r=20, t=50, b=90),
+        margin=dict(l=50, r=150, t=50, b=50),
     )
     return fig
 
@@ -1011,7 +1037,7 @@ def build_barge_rate_year_fig(year):
     ))
     fig.add_trace(go.Scatter(
         x=df_year["week"], y=df_year["avg_stlrate"],
-        mode="lines", line=dict(width=2, color="grey", dash="dash"), name="Mean",
+        mode="lines", line=dict(width=1.5, color="grey", dash="dash"), name="Mean",
     ))
     fig.add_trace(go.Scatter(
         x=df_year["week"], y=df_year["plusone"],
@@ -1020,15 +1046,15 @@ def build_barge_rate_year_fig(year):
     fig.add_trace(go.Scatter(
         x=df_year["week"], y=df_year["minusone"],
         mode="lines", fill="tonexty", fillcolor="rgba(160,160,160,0.3)",
-        name="±1 SD", line=dict(width=0), hoverinfo="skip",
+        name="Typical range (75% of years)", line=dict(width=0), hoverinfo="skip",
     ))
     fig.update_layout(
-        title=f"STL to NOLA Barge Freight Rates: {year}",
+        title=dict(text=f"STL to NOLA Barge Freight Rates: {year}", font=dict(size=13)),
         yaxis_title="$/ton",
-        height=260,
-        legend=dict(x=0.02, y=0.98, xanchor="left", yanchor="top",
+        height=180,
+        legend=dict(x=0.02, y=0.98, xanchor="left", yanchor="top", font=dict(size=10),
                      bgcolor="rgba(255,255,255,0.6)", bordercolor="black", borderwidth=1),
-        margin=dict(l=50, r=20, t=40, b=40),
+        margin=dict(l=45, r=15, t=30, b=30),
         hovermode="x unified",
     )
     return fig
@@ -1037,14 +1063,14 @@ def build_barge_rate_year_fig(year):
 def build_barge_rate_placeholder_fig():
     fig = go.Figure()
     fig.update_layout(
-        height=260,
+        height=180,
         margin=dict(l=20, r=20, t=20, b=20),
         xaxis=dict(visible=False),
         yaxis=dict(visible=False),
         annotations=[dict(
-            text="Hover a low-water year above to see that year's barge rates vs. the average.",
+            text="Click a year above to see that year's barge rates vs. the average.",
             xref="paper", yref="paper", x=0.5, y=0.5, showarrow=False,
-            font=dict(size=13, color="#888"),
+            font=dict(size=12, color="#888"),
         )],
     )
     return fig
@@ -1178,6 +1204,44 @@ app.layout = html.Div(
 
                 # Map, edge to edge
                 dcc.Graph(id="map", style={"height": "100%", "width": "100%"}),
+
+                # Welcome intro -- explains the map/site on first load, dismissed for the session
+                html.Div(id="welcome-backdrop", style=WELCOME_BACKDROP_VISIBLE),
+                html.Div(
+                    id="welcome-box",
+                    style=WELCOME_BOX_VISIBLE,
+                    children=[
+                        html.Button(
+                            "✕", id="welcome-close",
+                            style={
+                                "position": "absolute", "top": "10px", "right": "14px",
+                                "border": "none", "background": "none", "cursor": "pointer",
+                                "font-size": "18px", "color": "#888",
+                            }
+                        ),
+                        html.H3(
+                            "Welcome",
+                            style={
+                                "margin": "0 0 12px 0", "font-family": "'DM Sans', sans-serif",
+                                "font-weight": 700, "font-size": "20px", "color": "#1b3a5c",
+                            }
+                        ),
+                        html.Div(
+                            "This map shows real-time conditions on the Mississippi River system: "
+                            "river stage readings from USGS gages, dredging and shoaling notices from "
+                            "the U.S. Army Corps of Engineers, and bathymetric survey depths, all layered "
+                            "together in one place.",
+                            style={"font-size": "14px", "color": "#333", "line-height": "1.5", "margin-bottom": "10px"}
+                        ),
+                        html.Div(
+                            "Use the year selector and layer toggles on the left to explore different "
+                            "notice types and time periods, and click any dot on the map for details. "
+                            "Switch to the Barge Demand tab above to see how grain production and freight "
+                            "rates compare across years.",
+                            style={"font-size": "14px", "color": "#333", "line-height": "1.5"}
+                        ),
+                    ]
+                ),
 
                 # Notice click-detail box, top-right - shared by all four notice categories
                 # (dredging/shoaling/draft/other); clicking any marker opens it
@@ -1335,7 +1399,7 @@ app.layout = html.Div(
                                                 html.Div([
                                                     html.Span("Riverbed Surveys", style={"font-size": "16px"}),
                                                     html.Div(
-                                                        "Navigation Risk under Low Water",
+                                                        "Navigation Risk under Low Water:",
                                                         style={"font-size": "13px", "display": "block", "width": "100%"}
                                                     ),
                                                     html.Div(
@@ -1343,15 +1407,15 @@ app.layout = html.Div(
                                                         children=[
                                                             html.Div([
                                                                 html.Div(style={"width": "12px", "height": "12px", "border-radius": "50%", "background": RISK_BINS[0][1], "display": "inline-block", "margin-right": "4px", "vertical-align": "middle"}),
-                                                                html.Span("Low Risk", style={"font-size": "13px", "vertical-align": "middle"}),
+                                                                html.Span("Low", style={"font-size": "13px", "vertical-align": "middle"}),
                                                             ]),
                                                             html.Div([
                                                                 html.Div(style={"width": "12px", "height": "12px", "border-radius": "50%", "background": RISK_BINS[1][1], "display": "inline-block", "margin-right": "4px", "vertical-align": "middle"}),
-                                                                html.Span("Medium Risk", style={"font-size": "13px", "vertical-align": "middle"}),
+                                                                html.Span("Medium", style={"font-size": "13px", "vertical-align": "middle"}),
                                                             ]),
                                                             html.Div([
                                                                 html.Img(src="/assets/at_risk_marker.png", height="16", style={"display": "inline-block", "margin-right": "4px", "vertical-align": "middle"}),
-                                                                html.Span("High Risk", style={"font-size": "13px", "vertical-align": "middle"}),
+                                                                html.Span("High", style={"font-size": "13px", "vertical-align": "middle"}),
                                                             ]),
                                                         ]
                                                     ),
@@ -1408,7 +1472,7 @@ app.layout = html.Div(
 
                 # Tab to open/close the plots panel, on the right edge of the map
                 html.Button(
-                    "☰ Plots",
+                    ["View", html.Br(), "Price", html.Br(), "Plots"],
                     id="plots-toggle",
                     n_clicks=0,
                     style={
@@ -1419,11 +1483,12 @@ app.layout = html.Div(
                         "zIndex": "20",
                         "background": "#1b3a5c",
                         "color": "white",
-                        "border": "none",
+                        "border": "2px solid white",
                         "border-radius": "6px 0 0 6px",
                         "padding": "12px 8px",
                         "cursor": "pointer",
-                        "writing-mode": "vertical-rl",
+                        "font-size": "15px",
+                        "text-align": "center",
                     }
                 ),
 
@@ -1551,6 +1616,21 @@ app.layout = html.Div(
 
 
 # --------------------------------------------------
+# WELCOME INTRO MODAL
+# --------------------------------------------------
+
+
+@app.callback(
+    Output("welcome-box", "style"),
+    Output("welcome-backdrop", "style"),
+    Input("welcome-close", "n_clicks"),
+    prevent_initial_call=True,
+)
+def close_welcome(n_clicks):
+    return WELCOME_BOX_HIDDEN, WELCOME_BACKDROP_HIDDEN
+
+
+# --------------------------------------------------
 # PLOTS PANEL TOGGLE
 # --------------------------------------------------
 
@@ -1566,7 +1646,7 @@ app.layout = html.Div(
 def toggle_plots_panel(n_clicks, is_open):
     new_state = not is_open
     style = PLOTS_PANEL_OPEN if new_state else PLOTS_PANEL_CLOSED
-    label = "✕ Close" if new_state else "☰ Plots"
+    label = "✕ Close" if new_state else ["View", html.Br(), "Price", html.Br(), "Plots"]
     return style, new_state, label
 
 
@@ -1610,13 +1690,16 @@ def toggle_compare_years_box(open_clicks, close_clicks, is_open):
 
 @app.callback(
     Output("compare-years-barge-rate-plot", "figure"),
-    Input("compare-years-scatter", "hoverData"),
+    Input("compare-years-scatter", "clickData"),
 )
-def update_compare_years_barge_rate(hover_data):
-    if not hover_data:
+def update_compare_years_barge_rate(click_data):
+    if not click_data:
         return _barge_rate_placeholder_fig
-    year = hover_data["points"][0]["customdata"][0]
-    if year not in LOW_WATER_YEARS:
+    customdata = click_data["points"][0].get("customdata")
+    if not customdata:
+        return _barge_rate_placeholder_fig
+    year = int(customdata[0])
+    if year not in barge_rates["year"].values:
         return _barge_rate_placeholder_fig
     return build_barge_rate_year_fig(year)
 
@@ -2563,11 +2646,12 @@ def update_barge_rate_plot(year):
     else:
         df52 = barge_rates[barge_rates['year']==year]
     title = "St. Louis to New Orleans Barge Rate"
+    line_name = "Past 52 Weeks" if year == thisyear else str(year)
 
     fig = go.Figure()
     fig.add_trace(
         go.Scatter(x=df52["week"],y=df52["stlrate_per_ton"],
-            mode="lines",line=dict(width=2,color='#d95f0e'),name=year,showlegend=False)
+            mode="lines",line=dict(width=2,color='#d95f0e'),name=line_name)
     )
     fig.add_trace(
         go.Scatter(x=df52["week"],y=df52["avg_stlrate"],
@@ -2580,13 +2664,14 @@ def update_barge_rate_plot(year):
     fig.add_trace(
         go.Scatter(x=df52["week"],y=df52["minusone"],
             mode="lines",fill="tonexty",fillcolor="rgba(160,160,160,0.3)",
-            name="±1 SD",line=dict(width=0),hoverinfo="y",showlegend=False)
+            name="75% Range",line=dict(width=0),hoverinfo="skip",showlegend=True)
     )
     fig.update_layout(title=title,
         yaxis_title="$/ton",
-        yaxis=dict(range=[barge_rates['stlrate_per_ton'].min(), barge_rates['stlrate_per_ton'].max()]),
+        yaxis=dict(range=[barge_rates['stlrate_per_ton'].min(), barge_rates['stlrate_per_ton'].max()], hoverformat=".2f"),
             height=300,legend=dict(
-            x=0.02,y=0.98,xanchor="left",yanchor="top",
+            x=0.02,y=0.98,xanchor="left",yanchor="top",traceorder="normal",
+            font=dict(size=10),
             bgcolor="rgba(255,255,255,0.6)",bordercolor="black",borderwidth=1),
         margin=dict(l=50, r=20, t=40, b=40),
         hovermode="x unified"
@@ -2605,15 +2690,16 @@ def update_cornprice_plot(year):
     else:
         df365 = corn_price[corn_price['year']==year]
     title = "Gulf Corn Price"
+    line_name = "Past 52 Weeks" if year == thisyear else str(year)
 
     fig = go.Figure()
     fig.add_trace(
         go.Scatter(x=df365["date"],y=df365["gulf_corn_price"],
-            mode="lines",line=dict(width=2,color='#006837'),name=year,showlegend=False)
+            mode="lines",line=dict(width=2,color='#006837'),name=line_name)
     )
     fig.add_trace(
         go.Scatter(x=df365["date"],y=df365["avg_price"],
-            mode="lines",line=dict(width=2,color='grey',dash='dash'),name="Mean")
+            mode="lines",line=dict(width=2,color='grey',dash='dash'),name="Mean",showlegend=False)
     )
     fig.add_trace(
         go.Scatter(x=df365["date"],y=df365["plusone"],
@@ -2622,13 +2708,14 @@ def update_cornprice_plot(year):
     fig.add_trace(
         go.Scatter(x=df365["date"],y=df365["minusone"],
             mode="lines",fill="tonexty",fillcolor="rgba(160,160,160,0.3)",
-            name="±1 SD",line=dict(width=0),hoverinfo="y",showlegend=False)
+            name="75% Range",line=dict(width=0),hoverinfo="skip",showlegend=False)
     )
     fig.update_layout(title=title,
         yaxis_title="Price ($/bushel)",
-        yaxis=dict(range=[corn_price['gulf_corn_price'].min()-0.1, corn_price['gulf_corn_price'].max()+0.1]),
+        yaxis=dict(range=[corn_price['gulf_corn_price'].min()-0.1, corn_price['gulf_corn_price'].max()+0.1], hoverformat=".2f"),
         height=300,legend=dict(
-           x=0.02,y=0.98,xanchor="left",yanchor="top",
+           x=0.02,y=0.98,xanchor="left",yanchor="top",traceorder="normal",
+           font=dict(size=10),
            bgcolor="rgba(255,255,255,0.6)",bordercolor="black",borderwidth=1),
         margin=dict(l=50, r=20, t=40, b=40),
         hovermode="x unified"
@@ -2646,15 +2733,16 @@ def update_soyprice_plot(year):
     else:
         df365 = soy_price[soy_price['year']==year]
     title = "Gulf Soy Price"
+    line_name = "Past 52 Weeks" if year == thisyear else str(year)
 
     fig = go.Figure()
     fig.add_trace(
         go.Scatter(x=df365["date"],y=df365["gulf_soy_price"],
-            mode="lines",line=dict(width=2,color='#f1a340'),name=year,showlegend=False)
+            mode="lines",line=dict(width=2,color='#f1a340'),name=line_name)
     )
     fig.add_trace(
         go.Scatter(x=df365["date"],y=df365["avg_price"],
-            mode="lines",line=dict(width=2,color='grey',dash='dash'),name="Mean")
+            mode="lines",line=dict(width=2,color='grey',dash='dash'),name="Mean",showlegend=False)
     )
     fig.add_trace(
         go.Scatter(x=df365["date"],y=df365["plusone"],
@@ -2663,13 +2751,14 @@ def update_soyprice_plot(year):
     fig.add_trace(
         go.Scatter(x=df365["date"],y=df365["minusone"],
             mode="lines",fill="tonexty",fillcolor="rgba(160,160,160,0.3)",
-            name="±1 SD",line=dict(width=0),hoverinfo="y",showlegend=False)
+            name="75% Range",line=dict(width=0),hoverinfo="skip",showlegend=False)
     )
     fig.update_layout(title=title,
         yaxis_title="Price ($/bushel)",
-        yaxis=dict(range=[soy_price['gulf_soy_price'].min()-0.1, soy_price['gulf_soy_price'].max()+0.1]),
+        yaxis=dict(range=[soy_price['gulf_soy_price'].min()-0.1, soy_price['gulf_soy_price'].max()+0.1], hoverformat=".2f"),
         height=300,legend=dict(
-           x=0.02,y=0.98,xanchor="left",yanchor="top",
+           x=0.02,y=0.98,xanchor="left",yanchor="top",traceorder="normal",
+           font=dict(size=10),
            bgcolor="rgba(255,255,255,0.6)",bordercolor="black",borderwidth=1),
         margin=dict(l=50, r=20, t=40, b=40),
         hovermode="x unified"
