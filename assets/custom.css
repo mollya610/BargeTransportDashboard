@@ -1,0 +1,14 @@
+/* Riverbed Surveys layer-toggle option has multi-line label content (title,
+   subtitle, risk swatches), so the default vertical-centered checkbox floats
+   next to the middle of the whole block instead of the "Riverbed Surveys"
+   title. Pin it to the top of that option only -- the other layer-toggle
+   options are single-line and stay centered via the inline labelStyle. */
+#layer-toggle .dash-options-list-option-wrapper:first-child .dash-options-list-option,
+#layer-toggle > label:first-child {
+    align-items: flex-start !important;
+}
+
+#layer-toggle .dash-options-list-option-wrapper:first-child .dash-options-list-option-checkbox,
+#layer-toggle > label:first-child input[type="checkbox"] {
+    margin-top: 3px;
+}
