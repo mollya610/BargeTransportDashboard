@@ -1295,7 +1295,14 @@ app.layout = html.Div(
                         ),
                         html.Div(
                             "Explore the map and charts to see how this year compares to past ones.",
-                            style={"font-size": "15px", "color": "#333", "line-height": "1.5"}
+                            style={"font-size": "15px", "color": "#333", "line-height": "1.5", "margin-bottom": "10px"}
+                        ),
+                        html.Div(
+                            "Provided for informational purposes only; not an official navigation "
+                            "aid. Underlying data comes from public government sources, but its "
+                            "processing, analysis, and presentation here are independent and not "
+                            "reviewed or endorsed by those agencies.",
+                            style={"font-size": "12px", "color": "#888", "font-style": "italic", "line-height": "1.4"}
                         ),
                     ]
                 ),
@@ -1671,25 +1678,56 @@ app.layout = html.Div(
                     style={"max-width": "700px"},
                     children=[
                         html.Div(
-                            "This dashboard was built by Molly Alcorn, a PhD student at the University of "
-                            "North Carolina at Chapel Hill in the Department of Environmental Sciences and "
-                            "Engineering, researching at the Institute for Risk Management and Insurance "
-                            "Innovation. It's part of ongoing research into inland waterway grain "
-                            "transportation, built to visualize how river conditions and market forces "
-                            "shape barge shipping on the Mississippi River system.",
+                            [
+                                html.B(
+                                    "Low water on the Mississippi River can disrupt grain "
+                                    "transportation, increase barge freight rates, and create "
+                                    "uncertainty throughout the agricultural supply chain."
+                                ),
+                                " This dashboard brings together river conditions, navigation "
+                                "information, and grain market data to help users better understand "
+                                "transportation conditions on the Mississippi River system. It "
+                                "combines riverbed surveys, shoaling reports, dredging activity, "
+                                "river stages, barge freight rates, grain prices, and more into a "
+                                "single, interactive platform.",
+                            ],
                             style={**SECTION_SUBTEXT_STYLE, "margin-bottom": "18px"}
                         ),
                         html.Div(
-                            "It draws on publicly available data: river gage readings from the USGS, "
-                            "dredging and shoaling notices from the U.S. Army Corps of Engineers, grain "
-                            "production estimates from USDA WASDE reports, and barge freight rates and "
-                            "grain futures prices from public market data.",
+                            [
+                                "The project was developed by ",
+                                html.A(
+                                    "Molly Alcorn", href="https://www.linkedin.com/in/molly-alcorn-990042227/",
+                                    target="_blank", style={"color": "#2166ac"}
+                                ),
+                                ", a PhD student at the University of North Carolina at Chapel Hill ",
+                                html.A(
+                                    "Institute for Risk Management and Insurance Innovation",
+                                    href="https://irmii.unc.edu/",
+                                    target="_blank", style={"color": "#2166ac"}
+                                ),
+                                " researching how environmental disruptions, particularly low water "
+                                "levels, affect inland waterway transportation and commodity markets. "
+                                "By combining hydrologic, navigation, and market data, her work seeks "
+                                "to better understand and forecast barge freight rates and "
+                                "transportation delays, ultimately supporting more informed "
+                                "decision making across the grain supply chain.",
+                            ],
                             style={**SECTION_SUBTEXT_STYLE, "margin-bottom": "18px"}
                         ),
                         html.Div(
-                            "This is a research prototype, not an official or operational tool, and is "
-                            "provided for informational purposes only.",
-                            style={**SECTION_SUBTEXT_STYLE, "margin-bottom": "18px", "font-style": "italic", "color": "#777"}
+                            "The dashboard was created to make these publicly available datasets "
+                            "easier to access, interpret, and explore. It integrates information from "
+                            "multiple agencies into one interface while adding visualizations and "
+                            "analyses designed to support research and decision making.",
+                            style={**SECTION_SUBTEXT_STYLE, "margin-bottom": "18px"}
+                        ),
+                        html.Div(
+                            "Provided for informational purposes only; not an official navigation "
+                            "aid. Underlying data comes from public government sources, but its "
+                            "processing, analysis, and presentation here are independent and not "
+                            "reviewed or endorsed by those agencies.",
+                            style={**SECTION_SUBTEXT_STYLE, "margin-bottom": "18px", "font-style": "italic", "color": "#777", "font-size": "13px"}
                         ),
                         html.Div(
                             [
