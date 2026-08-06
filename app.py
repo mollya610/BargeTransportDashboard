@@ -1027,7 +1027,7 @@ def build_compare_years_fig(df):
                     range=[x_center - x_half, x_center + x_half]),
         yaxis=dict(title="Grain Production Index", title_font=dict(size=15), showticklabels=False,
                     range=[y_center - y_half, y_center + y_half]),
-        height=480,
+        height=450,
         width=596,
         # legend sits to the right of the plot, outside the data area, so it can never overlap a dot.
         # r=150 is sized for the legend text itself (doesn't shrink with the plot), not the plot square.
@@ -1125,8 +1125,7 @@ def build_demand_explanation_boxes():
                 children=[
                     html.H4("2. What does global grain demand look like?", style=SECTION_HEADER_STYLE),
                     html.Div(
-                        "Futures prices reflect what buyers are willing to pay for grain still in the field — "
-                        "prices running above the recent average signal stronger demand pulling more grain "
+                        "Higher futures prices signal stronger global demand pulling more grain "
                         "toward export, and more grain moving by barge.",
                         style=SECTION_SUBTEXT_STYLE
                     ),
