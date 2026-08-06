@@ -802,7 +802,7 @@ COMPARE_YEARS_TOGGLE_STYLE = {
     "background": "#2166ac", "color": "white", "border": "none",
     "border-radius": "8px", "padding": "16px 30px", "font-size": "20px",
     "cursor": "pointer", "margin-top": "10px",
-    "font-family": "'DM Sans', sans-serif", "font-weight": 600,
+    "font-family": "'DM Sans', sans-serif", "font-weight": "600",
 }
 COMPARE_YEARS_BOX_HIDDEN = {"display": "none"}
 COMPARE_YEARS_BOX_VISIBLE = {
@@ -822,7 +822,7 @@ NAV_LINK_BASE = {
 NAV_LINK_ACTIVE = {**NAV_LINK_BASE, "color": "white", "font-weight": "bold", "border-bottom": "2px solid white"}
 NAV_LINK_INACTIVE = {**NAV_LINK_BASE, "color": "rgba(255,255,255,0.65)", "font-weight": "normal", "border-bottom": "2px solid transparent"}
 
-SECTION_HEADER_STYLE = {"margin": "0 0 4px 0", "font-size": "18px", "color": "#1b3a5c", "font-family": "'DM Sans', sans-serif", "font-weight": 600}
+SECTION_HEADER_STYLE = {"margin": "0 0 4px 0", "font-size": "18px", "color": "#1b3a5c", "font-family": "'DM Sans', sans-serif", "font-weight": "600"}
 SECTION_SUBTEXT_STYLE = {"margin": "0 0 10px 0", "font-size": "17px", "color": "#555", "font-family": "'DM Sans', sans-serif"}
 CAPTION_STYLE = {"margin-top": "0px", "font-size": "14px", "color": "#777", "font-style": "italic", "font-family": "'DM Sans', sans-serif"}
 
@@ -1205,7 +1205,7 @@ app.layout = html.Div(
                     style={
                         "margin": "0 0 0 30px", "color": "white",
                         "font-family": "'DM Sans', sans-serif",
-                        "font-weight": 700,
+                        "font-weight": "700",
                         "font-size": "30px", "letter-spacing": "1.5px",
                     }
                 ),
@@ -1255,25 +1255,47 @@ app.layout = html.Div(
                             }
                         ),
                         html.H3(
-                            "Welcome",
+                            "Welcome!",
                             style={
                                 "margin": "0 0 12px 0", "font-family": "'DM Sans', sans-serif",
-                                "font-weight": 700, "font-size": "20px", "color": "#1b3a5c",
+                                "font-weight": "700", "font-size": "21px", "color": "#1b3a5c",
                             }
                         ),
                         html.Div(
-                            "This map shows real-time conditions on the Mississippi River system: "
-                            "river stage readings from USGS gages, dredging and shoaling notices from "
-                            "the U.S. Army Corps of Engineers, and bathymetric survey depths, all layered "
-                            "together in one place.",
-                            style={"font-size": "14px", "color": "#333", "line-height": "1.5", "margin-bottom": "10px"}
+                            [
+                                html.Span(
+                                    "The Mississippi River has been dropping to critically low levels "
+                                    "more often than ever. ",
+                                    style={"font-weight": "700"}
+                                ),
+                                "These low water levels typically hit during the ",
+                                html.Span("September-November", style={"text-decoration": "underline"}),
+                                " harvest season, which is the busiest stretch for barge navigation.",
+                            ],
+                            style={"font-size": "15px", "color": "#333", "line-height": "1.5", "margin-bottom": "10px"}
                         ),
                         html.Div(
-                            "Use the year selector and layer toggles on the left to explore different "
-                            "notice types and time periods, and click any dot on the map for details. "
-                            "Switch to the Barge Demand tab above to see how grain production and freight "
-                            "rates compare across years.",
-                            style={"font-size": "14px", "color": "#333", "line-height": "1.5"}
+                            "This dashboard keeps you updated on barge navigation, including",
+                            style={"font-size": "15px", "color": "#333", "line-height": "1.5"}
+                        ),
+                        html.Ul(
+                            [
+                                html.Li([
+                                    html.Span("Riverbed conditions", style={"font-weight": "700"}),
+                                    ": surveys and shoaling reports show where the river is most "
+                                    "likely to ground a barge under low water.",
+                                ]),
+                                html.Li([
+                                    html.Span("Grain markets", style={"font-weight": "700"}),
+                                    ": production and price data show what's driving barge "
+                                    "demand and rates.",
+                                ]),
+                            ],
+                            style={"font-size": "15px", "color": "#333", "line-height": "1.5", "margin": "6px 0 10px 0", "padding-left": "22px"}
+                        ),
+                        html.Div(
+                            "Explore the map and charts to see how this year compares to past ones.",
+                            style={"font-size": "15px", "color": "#333", "line-height": "1.5"}
                         ),
                     ]
                 ),
@@ -1579,7 +1601,7 @@ app.layout = html.Div(
                     style={
                         "margin": "0 0 18px 0",
                         "font-family": "'DM Sans', sans-serif",
-                        "font-weight": 700,
+                        "font-weight": "700",
                         "letter-spacing": "0.5px", "font-size": "24px", "color": "#1b3a5c",
                     }
                 ),
@@ -1641,7 +1663,7 @@ app.layout = html.Div(
                     style={
                         "margin": "0 0 18px 0",
                         "font-family": "'DM Sans', sans-serif",
-                        "font-weight": 700,
+                        "font-weight": "700",
                         "letter-spacing": "0.5px", "font-size": "24px", "color": "#1b3a5c",
                     }
                 ),
