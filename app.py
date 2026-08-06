@@ -928,10 +928,12 @@ def build_futures_chart(crop):
 
 def build_compare_years_data():
     """One row per year: a composite production index against a composite demand-price
-    index, both unitless. Corn and soybean production aren't on comparable scales (corn
-    runs ~3x soybean volume) any more than their futures prices are, so production gets
-    the same treatment as price below: each crop's yearly production is converted to a
-    z-score against its own full history, then the two z-scores are averaged.
+    index. Production is a straight sum of corn + soybean production (million bushels) --
+    no normalization, since both crops are already in the same unit. Price can't just be
+    summed the same way (soybean futures trade at a persistently higher $/bu level than
+    corn, so a raw sum would be soybean-price-dominated), so corn's price is first rescaled
+    by the ratio of the two crops' historical mean prices (putting it on soybean's price
+    scale) before the two are averaged.
 
     Production: NASS final-production years (grain_production_history, 2016+) are used
     where available; wasde_production_backfill fills in earlier years (back to 2008) NASS
@@ -944,44 +946,33 @@ def build_compare_years_data():
         subset=["corn_production_million_bu", "soybean_production_million_bu"]
     ).copy()
     prod = pd.concat([prod_nass, prod_backfill], ignore_index=True)
-    corn_prod_mean, corn_prod_std = prod["corn_production_million_bu"].mean(), prod["corn_production_million_bu"].std()
-    soy_prod_mean, soy_prod_std = prod["soybean_production_million_bu"].mean(), prod["soybean_production_million_bu"].std()
-    prod["corn_prod_z"] = (prod["corn_production_million_bu"] - corn_prod_mean) / corn_prod_std
-    prod["soy_prod_z"] = (prod["soybean_production_million_bu"] - soy_prod_mean) / soy_prod_std
-    prod["production_index"] = prod[["corn_prod_z", "soy_prod_z"]].mean(axis=1)
+    prod["production_index"] = prod["corn_production_million_bu"] + prod["soybean_production_million_bu"]
     rows = prod[["year", "production_index"]]
 
     # Current year's production is only a WASDE estimate, not a finished harvest, so it
-    # isn't part of the historical set above -- score it against that same historical
-    # mean/std rather than folding it into its own baseline.
+    # isn't part of the historical set above -- add it in the same way (a raw sum).
     if wasde_latest is not None:
         current_year = int(str(wasde_latest["marketing_year"]).split("/")[0])
-        current_corn_z = (wasde_latest["corn_production_million_bu"] - corn_prod_mean) / corn_prod_std
-        current_soy_z = (wasde_latest["soybean_production_million_bu"] - soy_prod_mean) / soy_prod_std
-        current_index = (current_corn_z + current_soy_z) / 2
+        current_index = wasde_latest["corn_production_million_bu"] + wasde_latest["soybean_production_million_bu"]
         rows = pd.concat([rows, pd.DataFrame([{"year": current_year, "production_index": current_index}])], ignore_index=True)
 
     sept_futures = futures_hist[futures_hist["date"].dt.month == 9]
     yearly_price = sept_futures.groupby("year")[["corn_dec_futures", "soy_nov_futures"]].mean().reset_index()
-    corn_mean, corn_std = yearly_price["corn_dec_futures"].mean(), yearly_price["corn_dec_futures"].std()
-    soy_mean, soy_std = yearly_price["soy_nov_futures"].mean(), yearly_price["soy_nov_futures"].std()
-    yearly_price["corn_z"] = (yearly_price["corn_dec_futures"] - corn_mean) / corn_std
-    yearly_price["soy_z"] = (yearly_price["soy_nov_futures"] - soy_mean) / soy_std
-    yearly_price["price_index"] = yearly_price[["corn_z", "soy_z"]].mean(axis=1)
+    corn_mean = yearly_price["corn_dec_futures"].mean()
+    soy_mean = yearly_price["soy_nov_futures"].mean()
+    price_ratio = soy_mean / corn_mean
+    yearly_price["price_index"] = (price_ratio * yearly_price["corn_dec_futures"] + yearly_price["soy_nov_futures"]) / 2
 
     # September hasn't happened yet for the in-progress year, so it has no row above --
-    # use the most recent available Dec-corn/Nov-soy quote instead, scored against the same
-    # Sept-based mean/std so it lands on the same scale as every other year's index.
+    # use the most recent available Dec-corn/Nov-soy quote instead, rescaled with the same
+    # price_ratio so it lands on the same scale as every other year's index.
     if thisyear not in yearly_price["year"].values:
         latest = futures_hist[futures_hist["year"] == thisyear].dropna(
             subset=["corn_dec_futures", "soy_nov_futures"], how="all"
         ).sort_values("date")
         if not latest.empty:
             corn_latest, soy_latest = latest.iloc[-1][["corn_dec_futures", "soy_nov_futures"]]
-            current_index = pd.Series({
-                "corn": (corn_latest - corn_mean) / corn_std,
-                "soy": (soy_latest - soy_mean) / soy_std,
-            }).mean()
+            current_index = (price_ratio * corn_latest + soy_latest) / 2
             yearly_price = pd.concat(
                 [yearly_price, pd.DataFrame([{"year": thisyear, "price_index": current_index}])],
                 ignore_index=True,
@@ -1023,14 +1014,17 @@ def build_compare_years_fig(df):
         hovertemplate="%{customdata[0]} (this year)<br>(click to see barge rates for %{customdata[0]})<extra></extra>",
     ))
 
-    # dividers at a neutral (z-score 0) demand index / production index split the plot
-    # into 4 quadrants -- e.g. top-left is a low-demand, high-production year. Both axes
-    # are now z-score composites centered on 0, so the range is just symmetric padding
-    # around that shared center rather than needing a separately computed midpoint.
-    x_center = 0
-    y_center = 0
-    x_half = (df["price_index"] - x_center).abs().max() * 1.15
-    y_half = (df["production_index"] - y_center).abs().max() * 1.15
+    # dividers split the plot into 4 quadrants -- e.g. top-left is a low-price,
+    # high-production year. Centering on the mean/median pulls the divider toward
+    # whichever side has more clustered years (here, several lower-price years drag
+    # the average down), leaving a lot of dead space on the other side. Centering on
+    # the midpoint of the actual min/max range instead keeps the divider visually
+    # balanced between the two extremes, with only the padding -- not the whole
+    # range -- added symmetrically around it.
+    x_center = (df["price_index"].min() + df["price_index"].max()) / 2
+    y_center = (df["production_index"].min() + df["production_index"].max()) / 2
+    x_half = (df["price_index"].max() - df["price_index"].min()) / 2 * 1.15
+    y_half = (df["production_index"].max() - df["production_index"].min()) / 2 * 1.15
     fig.add_vline(x=x_center, line_dash="dot", line_color="#bbb")
     fig.add_hline(y=y_center, line_dash="dot", line_color="#bbb")
 
