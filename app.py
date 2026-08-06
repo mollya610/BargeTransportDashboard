@@ -203,6 +203,15 @@ if _stage_csv.exists():
 else:
     river_stage_df = pd.DataFrame(columns=["date", "gage", "stage"])
 
+# Memphis gage stage, year-over-year -- same shape as the price plots below (2015+ only,
+# to keep the "other years" background from getting too cluttered with older history)
+memphis_stage = river_stage_df[
+    (river_stage_df["gage"] == "Memphis") & (river_stage_df["date"].dt.year >= 2015)
+].copy()
+memphis_stage["week_no"] = memphis_stage["date"].dt.isocalendar().week
+memphis_stage["year"] = memphis_stage["date"].dt.year
+memphis_stage = memphis_stage.sort_values("date").reset_index(drop=True)
+
 _climatology_csv = Path("river_stage_climatology.csv")
 if _climatology_csv.exists():
     river_stage_climatology = pd.read_csv(_climatology_csv)
@@ -364,23 +373,29 @@ try:
     barge_rates = pd.read_csv("barge_rates_history.csv", parse_dates=["week"])
     barge_rates['week_no']= barge_rates['week'].dt.isocalendar().week
     barge_rates['year'] = barge_rates['week'].dt.year
-    barge_demand = barge_rates.groupby(['week_no'])['stlrate_per_ton'].mean().reset_index().rename(columns={'stlrate_per_ton':'avg_stlrate'})
-    # middle-75% band (12.5th-87.5th percentile) is easier for a general audience to
-    # read than a standard-deviation band -- "most years fall in this range"
-    barge_p875 = barge_rates.groupby(['week_no'])['stlrate_per_ton'].quantile(0.875).reset_index().rename(columns={'stlrate_per_ton':'plusone'})
-    barge_p125 = barge_rates.groupby(['week_no'])['stlrate_per_ton'].quantile(0.125).reset_index().rename(columns={'stlrate_per_ton':'minusone'})
-    barge_rates = barge_rates.merge(barge_demand,on='week_no',how='inner')
-    barge_rates = barge_rates.merge(barge_p875,on='week_no',how='inner')
-    barge_rates = barge_rates.merge(barge_p125,on='week_no',how='inner')
-    # merging on week_no clusters same-week-number rows together regardless of year,
-    # which breaks the chronological order go.Scatter's line-drawing relies on
     barge_rates = barge_rates.sort_values('week').reset_index(drop=True)
 except Exception as e:
     print(f"Warning: could not load barge rate data ({e}). Freight rate chart will be empty.")
-    barge_rates = pd.DataFrame(columns=['week','stlrate_per_ton','week_no','year','avg_stlrate','plusone','minusone'])
+    barge_rates = pd.DataFrame(columns=['week','stlrate_per_ton','week_no','year'])
 
-end_date = barge_rates["week"].max() if not barge_rates.empty else pd.Timestamp.today()
-start_date = end_date - pd.Timedelta(weeks=52)
+# forward (not-yet-delivered) barge rate quotes -- same USDA workbook as the spot rate
+# above, but the NXTMONTH/THREEMONTH tabs quote the rate for a contract 1 or 3 months
+# out, alongside which calendar month that contract is for
+try:
+    barge_rates_nextmonth = pd.read_csv("barge_rates_nextmonth_history.csv", parse_dates=["week"])
+    barge_rates_nextmonth['week_no'] = barge_rates_nextmonth['week'].dt.isocalendar().week
+    barge_rates_nextmonth['year'] = barge_rates_nextmonth['week'].dt.year
+    barge_rates_nextmonth = barge_rates_nextmonth.sort_values('week').reset_index(drop=True)
+
+    barge_rates_threemonth = pd.read_csv("barge_rates_threemonth_history.csv", parse_dates=["week"])
+    barge_rates_threemonth['week_no'] = barge_rates_threemonth['week'].dt.isocalendar().week
+    barge_rates_threemonth['year'] = barge_rates_threemonth['week'].dt.year
+    barge_rates_threemonth = barge_rates_threemonth.sort_values('week').reset_index(drop=True)
+except Exception as e:
+    print(f"Warning: could not load forward barge rate data ({e}). Forward rate charts will be empty.")
+    barge_rates_nextmonth = pd.DataFrame(columns=['week','contract_month_label','fwd_rate_per_ton','week_no','year'])
+    barge_rates_threemonth = pd.DataFrame(columns=['week','contract_month_label','fwd_rate_per_ton','week_no','year'])
+
 thisyear = date.today().year
 
 # corn and soy price data (raw history fetched/updated daily by fetch_market_data.py)
@@ -388,36 +403,27 @@ try:
     corn_price = pd.read_csv("corn_price_history.csv", parse_dates=["date"])
     corn_price['week_no'] = corn_price['date'].dt.isocalendar().week
     corn_price['year'] = corn_price['date'].dt.year
-    corn_price['month'] = corn_price['date'].dt.month
-    meancorn = corn_price.groupby(['month'])[['gulf_corn_price']].mean().reset_index().rename(columns={'gulf_corn_price':'avg_price'})
-    # middle-75% band (12.5th-87.5th percentile) is easier for a general audience to
-    # read than a standard-deviation band -- "most years fall in this range"
-    p875corn = corn_price.groupby(['month'])[['gulf_corn_price']].quantile(0.875).reset_index().rename(columns={'gulf_corn_price':'plusone'})
-    p125corn = corn_price.groupby(['month'])[['gulf_corn_price']].quantile(0.125).reset_index().rename(columns={'gulf_corn_price':'minusone'})
-    corn_price = corn_price.merge(meancorn,on='month',how='inner')
-    corn_price = corn_price.merge(p875corn,on='month',how='inner')
-    corn_price = corn_price.merge(p125corn,on='month',how='inner')
-    # merging on month clusters same-calendar-month rows together regardless of year,
-    # which breaks the chronological order go.Scatter's line-drawing relies on
     corn_price = corn_price.sort_values('date').reset_index(drop=True)
 
     soy_price = pd.read_csv("soy_price_history.csv", parse_dates=["date"])
     soy_price['week_no'] = soy_price['date'].dt.isocalendar().week
     soy_price['year'] = soy_price['date'].dt.year
-    soy_price['month'] = soy_price['date'].dt.month
-    meansoy = soy_price.groupby(['month'])[['gulf_soy_price']].mean().reset_index().rename(columns={'gulf_soy_price':'avg_price'})
-    p875soy = soy_price.groupby(['month'])[['gulf_soy_price']].quantile(0.875).reset_index().rename(columns={'gulf_soy_price':'plusone'})
-    p125soy = soy_price.groupby(['month'])[['gulf_soy_price']].quantile(0.125).reset_index().rename(columns={'gulf_soy_price':'minusone'})
-    soy_price = soy_price.merge(meansoy,on='month',how='inner')
-    soy_price = soy_price.merge(p875soy,on='month',how='inner')
-    soy_price = soy_price.merge(p125soy,on='month',how='inner')
-    # merging on month clusters same-calendar-month rows together regardless of year,
-    # which breaks the chronological order go.Scatter's line-drawing relies on
     soy_price = soy_price.sort_values('date').reset_index(drop=True)
 except Exception as e:
     print(f"Warning: could not load corn/soy price data ({e}). Price charts will be empty.")
-    corn_price = pd.DataFrame(columns=['date','week_no','year','gulf_corn_price','month','avg_price','plusone','minusone'])
-    soy_price = pd.DataFrame(columns=['date','week_no','year','gulf_soy_price','month','avg_price','plusone','minusone'])
+    corn_price = pd.DataFrame(columns=['date','week_no','year','gulf_corn_price'])
+    soy_price = pd.DataFrame(columns=['date','week_no','year','gulf_soy_price'])
+
+# Illinois-to-Gulf corn price spread -- same USDA workbook as the corn/soy Gulf prices
+# above, just a different (precomputed) column on the same sheet
+try:
+    corn_spread = pd.read_csv("corn_spread_history.csv", parse_dates=["date"])
+    corn_spread['week_no'] = corn_spread['date'].dt.isocalendar().week
+    corn_spread['year'] = corn_spread['date'].dt.year
+    corn_spread = corn_spread.sort_values('date').reset_index(drop=True)
+except Exception as e:
+    print(f"Warning: could not load corn spread data ({e}). Corn spread chart will be empty.")
+    corn_spread = pd.DataFrame(columns=['date','week_no','year','il_gulf_corn_spread'])
 
 # Barge Demand indicator: current-year WASDE production estimate (fetch_wasde.py)
 try:
@@ -752,6 +758,13 @@ CURRENT_GAGE_VISIBLE = {
     "box-shadow": "0 2px 10px rgba(0,0,0,0.4)",
     "font-family": "Arial, sans-serif",
 }
+ZOOM_MEMO_HIDDEN = {"display": "none"}
+ZOOM_MEMO_VISIBLE = {
+    "width": "200px", "background": "rgba(255,255,255,0.9)",
+    "padding": "8px 14px", "border-radius": "8px",
+    "font-family": "Arial, sans-serif", "font-size": "11px",
+    "font-style": "italic", "color": "#777", "line-height": "1.35",
+}
 SURVEY_BANNER_HIDDEN = {"display": "none"}
 SURVEY_BANNER_VISIBLE = {
     "position": "relative", "width": "max-content", "max-width": "420px",
@@ -1047,25 +1060,53 @@ MONTH_WEEK_TICKVALS = _month_starts.isocalendar()["week"].tolist()
 MONTH_WEEK_TICKTEXT = _month_starts.strftime("%b").tolist()
 
 
-def build_barge_rate_year_fig(year):
-    # Years aren't aligned on calendar dates (a given week lands on different dates each
-    # year), so comparison uses ISO week number (week_no) as the shared x-axis instead.
-    fig = go.Figure()
-    other_years = sorted(y for y in barge_rates["year"].unique() if y != year)
+def _year_overlay_traces(df, x_col, y_col, year, color, hover_date_col, value_hover_fmt,
+                          compare_year=None, compare_color="#000000", month_label_col=None):
+    """Background line per non-selected year in light grey, with the selected year's line
+    highlighted in `color` on top, and an optional second `compare_year` highlighted in
+    `compare_color` for side-by-side comparison. Years aren't aligned on calendar dates (a
+    given week/day lands on a different date each year), so x_col is expected to be a
+    year-agnostic axis like ISO week number, with hover_date_col supplying the real date
+    for the tooltip. Pass `month_label_col` for forward-rate series where the hover should
+    also show which calendar month the quoted rate's contract is for."""
+    def _highlighted_trace(y, line_color, rank):
+        df_y = df[df["year"] == y].sort_values(x_col)
+        if month_label_col:
+            customdata = df_y[[hover_date_col, month_label_col]]
+            hovertemplate = (
+                f"%{{customdata[0]|%b %d, %Y}}: {value_hover_fmt}"
+                f"<br>Contract month: %{{customdata[1]}}<extra></extra>"
+            )
+        else:
+            customdata = df_y[hover_date_col]
+            hovertemplate = f"%{{customdata|%b %d, %Y}}: {value_hover_fmt}<extra></extra>"
+        return go.Scatter(
+            x=df_y[x_col], y=df_y[y_col],
+            customdata=customdata,
+            mode="lines", line=dict(width=2.5, color=line_color), name=str(y), legendrank=rank,
+            hovertemplate=hovertemplate,
+        )
+
+    traces = []
+    skip_years = {year, compare_year}
+    other_years = sorted(y for y in df["year"].unique() if y not in skip_years)
     for i, other_year in enumerate(other_years):
-        df_other = barge_rates[barge_rates["year"] == other_year].sort_values("week_no")
-        fig.add_trace(go.Scatter(
-            x=df_other["week_no"], y=df_other["stlrate_per_ton"],
+        df_other = df[df["year"] == other_year].sort_values(x_col)
+        traces.append(go.Scatter(
+            x=df_other[x_col], y=df_other[y_col],
             mode="lines", line=dict(width=1, color="#cccccc"),
             name="Other years", legendgroup="other_years", showlegend=(i == 0),
-            legendrank=2, hoverinfo="skip",
+            legendrank=3, hoverinfo="skip",
         ))
-    df_year = barge_rates[barge_rates["year"] == year].sort_values("week_no")
-    fig.add_trace(go.Scatter(
-        x=df_year["week_no"], y=df_year["stlrate_per_ton"],
-        customdata=df_year["week"],
-        mode="lines", line=dict(width=2.5, color="#7b3fa0"), name=str(year), legendrank=1,
-        hovertemplate="%{customdata|%b %d, %Y}: $%{y:.2f}<extra></extra>",
+    if compare_year is not None and compare_year != year:
+        traces.append(_highlighted_trace(compare_year, compare_color, rank=2))
+    traces.append(_highlighted_trace(year, color, rank=1))
+    return traces
+
+
+def build_barge_rate_year_fig(year):
+    fig = go.Figure(data=_year_overlay_traces(
+        barge_rates, "week_no", "stlrate_per_ton", year, "#7b3fa0", "week", "$%{y:.2f}"
     ))
     fig.update_layout(
         title=dict(text="<b>St Louis to New Orleans Spot Barge Rates</b>", font=dict(size=17)),
@@ -1380,6 +1421,14 @@ app.layout = html.Div(
                             id="current-gage-box",
                             style={"display": "none"},
                         ),
+
+                        # Reminder that the depth-legend map only renders once zoomed in far
+                        # enough on the selected survey point -- shown alongside the current
+                        # gage reading so it's visible right when someone clicks a survey dot
+                        html.Div(
+                            id="survey-zoom-memo",
+                            style={"display": "none"},
+                        ),
                     ]
                 ),
 
@@ -1662,9 +1711,36 @@ app.layout = html.Div(
                     id="plots-panel",
                     style=PLOTS_PANEL_CLOSED,
                     children=[
+                        html.Div(
+                            style={
+                                "margin-bottom": "16px", "display": "flex",
+                                "align-items": "center", "gap": "10px",
+                            },
+                            children=[
+                                html.Label(
+                                    "Compare to another year?",
+                                    style={
+                                        "font-weight": "bold", "font-size": "13px", "color": "#1b3a5c",
+                                        "font-family": "'DM Sans', sans-serif", "white-space": "nowrap",
+                                    }
+                                ),
+                                dcc.Dropdown(
+                                    id="compare-year-dropdown",
+                                    options=[],
+                                    value=None,
+                                    placeholder="Select a year",
+                                    clearable=True,
+                                    style={"font-size": "13px", "width": "110px"},
+                                ),
+                            ]
+                        ),
                         dcc.Graph(id="barge-rate-plot", style={"height": "300px"}, config={"displayModeBar": False}),
+                        dcc.Graph(id="barge-rate-nextmonth-plot", style={"height": "300px"}, config={"displayModeBar": False}),
+                        dcc.Graph(id="barge-rate-threemonth-plot", style={"height": "300px"}, config={"displayModeBar": False}),
+                        dcc.Graph(id="corn-spread-plot", style={"height": "300px"}, config={"displayModeBar": False}),
                         dcc.Graph(id="cornprice-plot", style={"height": "300px"}, config={"displayModeBar": False}),
-                        dcc.Graph(id="soyprice-plot", style={"height": "300px"}, config={"displayModeBar": False})
+                        dcc.Graph(id="soyprice-plot", style={"height": "300px"}, config={"displayModeBar": False}),
+                        dcc.Graph(id="memphis-stage-plot", style={"height": "300px"}, config={"displayModeBar": False})
                         # Additional plots can be added as more children
                     ]
                 )
@@ -2549,15 +2625,17 @@ def render_survey_banner(data):
 @app.callback(
     Output("current-gage-box", "style"),
     Output("current-gage-box", "children"),
+    Output("survey-zoom-memo", "style"),
+    Output("survey-zoom-memo", "children"),
     Input("selected-survey-store", "data"),
 )
 def render_current_gage(data):
     if not data:
-        return CURRENT_GAGE_HIDDEN, []
+        return CURRENT_GAGE_HIDDEN, [], ZOOM_MEMO_HIDDEN, []
     gage_name = data.get("gage_name", "Memphis")
     latest = river_stage_df[river_stage_df["gage"] == gage_name].sort_values("date")
     if latest.empty:
-        return CURRENT_GAGE_HIDDEN, []
+        return CURRENT_GAGE_HIDDEN, [], ZOOM_MEMO_HIDDEN, []
     latest_row = latest.iloc[-1]
     content = [
         html.Div(
@@ -2573,7 +2651,8 @@ def render_current_gage(data):
             style={"font-size": "10px", "color": "#888", "margin-top": "2px"},
         ),
     ]
-    return CURRENT_GAGE_VISIBLE, content
+    memo = "If you can't see the depth map, make sure to zoom in completely on the survey point you selected."
+    return CURRENT_GAGE_VISIBLE, content, ZOOM_MEMO_VISIBLE, memo
 
 
 @app.callback(
@@ -2846,91 +2925,149 @@ def render_gage_panel(data):
     return GAGE_DETAIL_VISIBLE, content, fig
 
 
+@app.callback(
+    Output("compare-year-dropdown", "options"),
+    Output("compare-year-dropdown", "value"),
+    Input("year-slider", "value"),
+    State("compare-year-dropdown", "value"),
+)
+def update_compare_year_options(primary_year, current_compare):
+    # can't compare a year to itself -- drop it from the choices, and clear a stale
+    # selection if the primary year was just changed to match it
+    options = [{"label": str(y), "value": y} for y in years if y != primary_year]
+    value = current_compare if current_compare != primary_year else None
+    return options, value
+
+
 # another callback for the barge rate plot
 @app.callback(
     Output("barge-rate-plot", "figure"),
-    Input("year-slider", "value")
+    Input("year-slider", "value"),
+    Input("compare-year-dropdown", "value"),
 )
-def update_barge_rate_plot(year):
-    # filter barge rates by year
-    if year == thisyear:
-        df52 = barge_rates[(barge_rates["week"] >= start_date) &(barge_rates["week"] <= end_date)]
-    else:
-        df52 = barge_rates[barge_rates['year']==year]
-    title = "St. Louis to New Orleans Barge Rate"
-    line_name = "Past 52 Weeks" if year == thisyear else str(year)
-
-    fig = go.Figure()
-    fig.add_trace(
-        go.Scatter(x=df52["week"],y=df52["stlrate_per_ton"],
-            mode="lines",line=dict(width=2,color='#d95f0e'),name=line_name)
-    )
-    fig.add_trace(
-        go.Scatter(x=df52["week"],y=df52["avg_stlrate"],
-            mode="lines",line=dict(width=2,color='grey',dash='dash'),name="Mean")
-    )
-    fig.add_trace(
-        go.Scatter(x=df52["week"],y=df52["plusone"],
-            mode="lines",line=dict(width=0),hoverinfo="skip",showlegend=False)
-    )
-    fig.add_trace(
-        go.Scatter(x=df52["week"],y=df52["minusone"],
-            mode="lines",fill="tonexty",fillcolor="rgba(160,160,160,0.3)",
-            name="75% Range",line=dict(width=0),hoverinfo="skip",showlegend=True)
-    )
+def update_barge_rate_plot(year, compare_year):
+    fig = go.Figure(data=_year_overlay_traces(
+        barge_rates, "week_no", "stlrate_per_ton", year, "#d95f0e", "week", "$%{y:.2f}/ton",
+        compare_year=compare_year,
+    ))
     fig.update_layout(
         title=dict(
-            text=title,
+            text="St. Louis to New Orleans Spot Barge Rate",
             subtitle=dict(text="Source: U.S. Department of Agriculture Agricultural Marketing Service", font=dict(size=10, color="#999")),
         ),
-        yaxis_title="$/ton",
+        xaxis=dict(tickvals=MONTH_WEEK_TICKVALS, ticktext=MONTH_WEEK_TICKTEXT),
+        yaxis_title="Barge Rate ($/ton)",
         yaxis=dict(range=[barge_rates['stlrate_per_ton'].min(), barge_rates['stlrate_per_ton'].max()], hoverformat=".2f"),
             height=300,legend=dict(
             x=0.02,y=0.98,xanchor="left",yanchor="top",traceorder="normal",
             font=dict(size=10),
             bgcolor="rgba(255,255,255,0.6)",bordercolor="black",borderwidth=1),
         margin=dict(l=50, r=20, t=55, b=40),
-        hovermode="x unified"
+        hovermode="closest"
+    )
+    return fig
+
+
+@app.callback(
+    Output("barge-rate-nextmonth-plot", "figure"),
+    Input("year-slider", "value"),
+    Input("compare-year-dropdown", "value"),
+)
+def update_barge_rate_nextmonth_plot(year, compare_year):
+    fig = go.Figure(data=_year_overlay_traces(
+        barge_rates_nextmonth, "week_no", "fwd_rate_per_ton", year, "#8c564b", "week", "$%{y:.2f}/ton",
+        compare_year=compare_year, month_label_col="contract_month_label",
+    ))
+    fig.update_layout(
+        title=dict(
+            text="Forward Barge Rate: 1 Month",
+            subtitle=dict(text="Source: U.S. Department of Agriculture Agricultural Marketing Service", font=dict(size=10, color="#999")),
+        ),
+        xaxis=dict(tickvals=MONTH_WEEK_TICKVALS, ticktext=MONTH_WEEK_TICKTEXT),
+        yaxis_title="Barge Rate ($/ton)",
+        yaxis=dict(range=[barge_rates_nextmonth['fwd_rate_per_ton'].min(), barge_rates_nextmonth['fwd_rate_per_ton'].max()], hoverformat=".2f"),
+            height=300,legend=dict(
+            x=0.02,y=0.98,xanchor="left",yanchor="top",traceorder="normal",
+            font=dict(size=10),
+            bgcolor="rgba(255,255,255,0.6)",bordercolor="black",borderwidth=1),
+        margin=dict(l=50, r=20, t=55, b=40),
+        hovermode="closest"
+    )
+    return fig
+
+
+@app.callback(
+    Output("barge-rate-threemonth-plot", "figure"),
+    Input("year-slider", "value"),
+    Input("compare-year-dropdown", "value"),
+)
+def update_barge_rate_threemonth_plot(year, compare_year):
+    fig = go.Figure(data=_year_overlay_traces(
+        barge_rates_threemonth, "week_no", "fwd_rate_per_ton", year, "#c51b7d", "week", "$%{y:.2f}/ton",
+        compare_year=compare_year, month_label_col="contract_month_label",
+    ))
+    fig.update_layout(
+        title=dict(
+            text="Forward Barge Rate: 3 Months",
+            subtitle=dict(text="Source: U.S. Department of Agriculture Agricultural Marketing Service", font=dict(size=10, color="#999")),
+        ),
+        xaxis=dict(tickvals=MONTH_WEEK_TICKVALS, ticktext=MONTH_WEEK_TICKTEXT),
+        yaxis_title="Barge Rate ($/ton)",
+        yaxis=dict(range=[barge_rates_threemonth['fwd_rate_per_ton'].min(), barge_rates_threemonth['fwd_rate_per_ton'].max()], hoverformat=".2f"),
+            height=300,legend=dict(
+            x=0.02,y=0.98,xanchor="left",yanchor="top",traceorder="normal",
+            font=dict(size=10),
+            bgcolor="rgba(255,255,255,0.6)",bordercolor="black",borderwidth=1),
+        margin=dict(l=50, r=20, t=55, b=40),
+        hovermode="closest"
+    )
+    return fig
+
+
+@app.callback(
+    Output("corn-spread-plot", "figure"),
+    Input("year-slider", "value"),
+    Input("compare-year-dropdown", "value"),
+)
+def update_corn_spread_plot(year, compare_year):
+    fig = go.Figure(data=_year_overlay_traces(
+        corn_spread, "week_no", "il_gulf_corn_spread", year, "#1b9e77", "date", "$%{y:.2f}/bu",
+        compare_year=compare_year,
+    ))
+    fig.update_layout(
+        title=dict(
+            text="Illinois–Gulf Corn Price Spread",
+            subtitle=dict(text="Source: U.S. Department of Agriculture Agricultural Marketing Service", font=dict(size=10, color="#999")),
+        ),
+        xaxis=dict(tickvals=MONTH_WEEK_TICKVALS, ticktext=MONTH_WEEK_TICKTEXT),
+        yaxis_title="Spread ($/bushel)",
+        yaxis=dict(range=[corn_spread['il_gulf_corn_spread'].min()-0.1, corn_spread['il_gulf_corn_spread'].max()+0.1], hoverformat=".2f"),
+            height=300,legend=dict(
+            x=0.02,y=0.98,xanchor="left",yanchor="top",traceorder="normal",
+            font=dict(size=10),
+            bgcolor="rgba(255,255,255,0.6)",bordercolor="black",borderwidth=1),
+        margin=dict(l=50, r=20, t=55, b=40),
+        hovermode="closest"
     )
     return fig
 
 #now a callback for corn price plot
 @app.callback(
     Output("cornprice-plot", "figure"),
-    Input("year-slider", "value")
+    Input("year-slider", "value"),
+    Input("compare-year-dropdown", "value"),
 )
-def update_cornprice_plot(year):
-    # filter barge rates by year
-    if year == thisyear:
-        df365 = corn_price[(corn_price["date"] >= start_date) &(corn_price["date"] <= end_date)]
-    else:
-        df365 = corn_price[corn_price['year']==year]
-    title = "Gulf Corn Price"
-    line_name = "Past 52 Weeks" if year == thisyear else str(year)
-
-    fig = go.Figure()
-    fig.add_trace(
-        go.Scatter(x=df365["date"],y=df365["gulf_corn_price"],
-            mode="lines",line=dict(width=2,color='#006837'),name=line_name)
-    )
-    fig.add_trace(
-        go.Scatter(x=df365["date"],y=df365["avg_price"],
-            mode="lines",line=dict(width=2,color='grey',dash='dash'),name="Mean",showlegend=False)
-    )
-    fig.add_trace(
-        go.Scatter(x=df365["date"],y=df365["plusone"],
-            mode="lines",line=dict(width=0),hoverinfo="skip",showlegend=False)
-    )
-    fig.add_trace(
-        go.Scatter(x=df365["date"],y=df365["minusone"],
-            mode="lines",fill="tonexty",fillcolor="rgba(160,160,160,0.3)",
-            name="75% Range",line=dict(width=0),hoverinfo="skip",showlegend=False)
-    )
+def update_cornprice_plot(year, compare_year):
+    fig = go.Figure(data=_year_overlay_traces(
+        corn_price, "week_no", "gulf_corn_price", year, "#006837", "date", "$%{y:.2f}/bu",
+        compare_year=compare_year,
+    ))
     fig.update_layout(
         title=dict(
-            text=title,
+            text="Gulf Corn Price",
             subtitle=dict(text="Source: U.S. Department of Agriculture Agricultural Marketing Service", font=dict(size=10, color="#999")),
         ),
+        xaxis=dict(tickvals=MONTH_WEEK_TICKVALS, ticktext=MONTH_WEEK_TICKTEXT),
         yaxis_title="Price ($/bushel)",
         yaxis=dict(range=[corn_price['gulf_corn_price'].min()-0.1, corn_price['gulf_corn_price'].max()+0.1], hoverformat=".2f"),
         height=300,legend=dict(
@@ -2938,46 +3075,26 @@ def update_cornprice_plot(year):
            font=dict(size=10),
            bgcolor="rgba(255,255,255,0.6)",bordercolor="black",borderwidth=1),
         margin=dict(l=50, r=20, t=55, b=40),
-        hovermode="x unified"
+        hovermode="closest"
     )
     return fig
 
 @app.callback(
     Output("soyprice-plot", "figure"),
-    Input("year-slider", "value")
+    Input("year-slider", "value"),
+    Input("compare-year-dropdown", "value"),
 )
-def update_soyprice_plot(year):
-    # filter barge rates by year
-    if year == thisyear:
-        df365 = soy_price[(soy_price["date"] >= start_date) &(soy_price["date"] <= end_date)]
-    else:
-        df365 = soy_price[soy_price['year']==year]
-    title = "Gulf Soybean Price"
-    line_name = "Past 52 Weeks" if year == thisyear else str(year)
-
-    fig = go.Figure()
-    fig.add_trace(
-        go.Scatter(x=df365["date"],y=df365["gulf_soy_price"],
-            mode="lines",line=dict(width=2,color='#f1a340'),name=line_name)
-    )
-    fig.add_trace(
-        go.Scatter(x=df365["date"],y=df365["avg_price"],
-            mode="lines",line=dict(width=2,color='grey',dash='dash'),name="Mean",showlegend=False)
-    )
-    fig.add_trace(
-        go.Scatter(x=df365["date"],y=df365["plusone"],
-            mode="lines",line=dict(width=0),hoverinfo="skip",showlegend=False)
-    )
-    fig.add_trace(
-        go.Scatter(x=df365["date"],y=df365["minusone"],
-            mode="lines",fill="tonexty",fillcolor="rgba(160,160,160,0.3)",
-            name="75% Range",line=dict(width=0),hoverinfo="skip",showlegend=False)
-    )
+def update_soyprice_plot(year, compare_year):
+    fig = go.Figure(data=_year_overlay_traces(
+        soy_price, "week_no", "gulf_soy_price", year, "#f1a340", "date", "$%{y:.2f}/bu",
+        compare_year=compare_year,
+    ))
     fig.update_layout(
         title=dict(
-            text=title,
+            text="Gulf Soybean Price",
             subtitle=dict(text="Source: U.S. Department of Agriculture Agricultural Marketing Service", font=dict(size=10, color="#999")),
         ),
+        xaxis=dict(tickvals=MONTH_WEEK_TICKVALS, ticktext=MONTH_WEEK_TICKTEXT),
         yaxis_title="Price ($/bushel)",
         yaxis=dict(range=[soy_price['gulf_soy_price'].min()-0.1, soy_price['gulf_soy_price'].max()+0.1], hoverformat=".2f"),
         height=300,legend=dict(
@@ -2985,7 +3102,35 @@ def update_soyprice_plot(year):
            font=dict(size=10),
            bgcolor="rgba(255,255,255,0.6)",bordercolor="black",borderwidth=1),
         margin=dict(l=50, r=20, t=55, b=40),
-        hovermode="x unified"
+        hovermode="closest"
+    )
+    return fig
+
+
+@app.callback(
+    Output("memphis-stage-plot", "figure"),
+    Input("year-slider", "value"),
+    Input("compare-year-dropdown", "value"),
+)
+def update_memphis_stage_plot(year, compare_year):
+    fig = go.Figure(data=_year_overlay_traces(
+        memphis_stage, "week_no", "stage", year, "#2166ac", "date", "%{y:.2f} ft",
+        compare_year=compare_year,
+    ))
+    fig.update_layout(
+        title=dict(
+            text="Memphis River Stage",
+            subtitle=dict(text="Source: NOAA National Weather Service", font=dict(size=10, color="#999")),
+        ),
+        xaxis=dict(tickvals=MONTH_WEEK_TICKVALS, ticktext=MONTH_WEEK_TICKTEXT),
+        yaxis_title="Stage (ft)",
+        yaxis=dict(range=[memphis_stage['stage'].min()-1, memphis_stage['stage'].max()+1], hoverformat=".2f"),
+        height=300,legend=dict(
+           x=0.02,y=0.98,xanchor="left",yanchor="top",traceorder="normal",
+           font=dict(size=10),
+           bgcolor="rgba(255,255,255,0.6)",bordercolor="black",borderwidth=1),
+        margin=dict(l=50, r=20, t=55, b=40),
+        hovermode="closest"
     )
     return fig
 # --------------------------------------------------

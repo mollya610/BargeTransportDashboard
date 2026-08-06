@@ -12,11 +12,19 @@ import pandas as pd
 from pathlib import Path
 
 BARGE_CSV = Path("barge_rates_history.csv")
+NXTMONTH_CSV = Path("barge_rates_nextmonth_history.csv")
+THREEMONTH_CSV = Path("barge_rates_threemonth_history.csv")
 CORN_CSV = Path("corn_price_history.csv")
 SOY_CSV = Path("soy_price_history.csv")
+CORN_SPREAD_CSV = Path("corn_spread_history.csv")
 FUTURES_CSV = Path("futures_dec_nov_history.csv")
 
 MARS_API_URL = "https://marsapi.ams.usda.gov/services/v1.2/reports/3192"  # Illinois Grain Bids
+
+_MONTH_NUM_TO_NAME = {
+    1: "Jan", 2: "Feb", 3: "Mar", 4: "Apr", 5: "May", 6: "Jun",
+    7: "Jul", 8: "Aug", 9: "Sep", 10: "Oct", 11: "Nov", 12: "Dec",
+}
 
 _MONTH_ALIASES = {
     "jan": "Jan", "mar": "Mar", "march": "Mar", "may": "May",
@@ -47,6 +55,31 @@ def fetch_barge_rates():
     return barge_rates.dropna(subset=["week", "stlrate_per_ton"])
 
 
+def _forward_rate_df(sheet_name):
+    # NXTMONTH/THREEMONTH have a second, unused block of the same columns (DATE.1,
+    # MONTH.1, ...) further right in the sheet -- naming the columns explicitly picks
+    # up only the first (live) block.
+    df = pd.read_excel(
+        "freight_rates_southbound.xlsx", sheet_name=sheet_name, header=0,
+        usecols=["DATE", "MONTH", "ST LOUIS"],
+    )
+    df = df.rename(columns={"DATE": "week", "MONTH": "contract_month", "ST LOUIS": "fwd_rate_per_ton"})
+    df["week"] = pd.to_datetime(df["week"])
+    df["fwd_rate_per_ton"] = (df["fwd_rate_per_ton"] * 3.99) / 100
+    # the contract month is a bare 1-12 number with no year -- a contract month earlier
+    # than the quote week's own month means it's rolled over into the following year
+    # (e.g. a December quote for a January contract)
+    contract_year = df["week"].dt.year + (df["contract_month"] < df["week"].dt.month).astype(int)
+    df["contract_month_label"] = df["contract_month"].map(_MONTH_NUM_TO_NAME) + " " + contract_year.astype(str)
+    return df.dropna(subset=["week", "fwd_rate_per_ton"]).loc[:, ["week", "contract_month_label", "fwd_rate_per_ton"]]
+
+
+def fetch_forward_barge_rates():
+    url = "https://www.ams.usda.gov/sites/default/files/media/GTRFigure10Table9.xlsx"
+    _download(url, "freight_rates_southbound.xlsx")
+    return _forward_rate_df("NXTMONTH"), _forward_rate_df("THREEMONTH")
+
+
 def fetch_corn_soy_prices():
     url = "https://www.ams.usda.gov/sites/default/files/media/GTRTable2A_B.xlsx"
     _download(url, "price_spreads_futures_usda.xlsx")
@@ -63,6 +96,17 @@ def fetch_corn_soy_prices():
     corn_price["date"] = pd.to_datetime(corn_price["date"])
     corn_price = corn_price.dropna(subset=["date", "gulf_corn_price"])
 
+    # this same sheet already carries a precomputed origin-minus-destination spread
+    # ("Price spreads") -- Illinois only, not the IA--Gulf rows also present above
+    il_gulf_corn = corn_soy_spread[
+        (corn_soy_spread["Commodity"] == "Corn")
+        & (corn_soy_spread["Origin--destination"].isin(["IL--Gulf", "IL–Gulf"]))
+    ].rename(columns={"Unnamed: 0": "date", "Price spreads": "il_gulf_corn_spread"})
+    corn_spread_df = il_gulf_corn.loc[:, ("date", "il_gulf_corn_spread")].copy()
+    corn_spread_df["date"] = pd.to_datetime(corn_spread_df["date"])
+    corn_spread_df["il_gulf_corn_spread"] = pd.to_numeric(corn_spread_df["il_gulf_corn_spread"], errors="coerce")
+    corn_spread_df = corn_spread_df.dropna(subset=["date", "il_gulf_corn_spread"])
+
     soy_spread = corn_soy_spread.rename(columns={"Unnamed: 0": "date", "Destination Price": "gulf_soy_price"})
     soy_spread["date"] = soy_spread["date"].shift(1)
     soy_spread = soy_spread[soy_spread["Commodity"] == "Soybean"]
@@ -71,7 +115,7 @@ def fetch_corn_soy_prices():
     soy_price["date"] = pd.to_datetime(soy_price["date"])
     soy_price = soy_price.dropna(subset=["date", "gulf_soy_price"])
 
-    return corn_price, soy_price
+    return corn_price, soy_price, corn_spread_df
 
 
 def _normalize_month(value):
@@ -201,9 +245,17 @@ def main():
         print(f"Barge rates: ERROR — {e}")
 
     try:
-        corn_price, soy_price = fetch_corn_soy_prices()
+        nextmonth_rates, threemonth_rates = fetch_forward_barge_rates()
+        _merge_and_save(NXTMONTH_CSV, nextmonth_rates, "week")
+        _merge_and_save(THREEMONTH_CSV, threemonth_rates, "week")
+    except Exception as e:
+        print(f"Forward barge rates: ERROR — {e}")
+
+    try:
+        corn_price, soy_price, corn_spread = fetch_corn_soy_prices()
         _merge_and_save(CORN_CSV, corn_price, "date")
         _merge_and_save(SOY_CSV, soy_price, "date")
+        _merge_and_save(CORN_SPREAD_CSV, corn_spread, "date")
     except Exception as e:
         print(f"Corn/soy prices: ERROR — {e}")
 
