@@ -2027,7 +2027,40 @@ app.layout = html.Div(
                                 "Questions or feedback? ",
                                 html.A("malcor@unc.edu", href="mailto:malcor@unc.edu", style={"color": "#2166ac"}),
                             ],
-                            style=SECTION_SUBTEXT_STYLE
+                            style={**SECTION_SUBTEXT_STYLE, "margin-bottom": "24px"}
+                        ),
+                        html.H4("Data Sources", style=SECTION_HEADER_STYLE),
+                        html.Ul(
+                            [
+                                html.Li([
+                                    html.B("U.S. Army Corps of Engineers (USACE) eHydro"), " — riverbed "
+                                    "surveys and dredging depth data",
+                                ]),
+                                html.Li([
+                                    html.B("USCG Local Notice to Mariners"), " — shoaling, draft "
+                                    "restriction, dredging, and other navigation notices",
+                                ]),
+                                html.Li([
+                                    html.B("NOAA Marine Cadastre AIS data"), " — dredge vessel activity",
+                                ]),
+                                html.Li([
+                                    html.B("USGS National Water Information System"), " and ",
+                                    html.B("NOAA National Weather Service"), " — river stage / gage readings",
+                                ]),
+                                html.Li([
+                                    html.B("USDA Agricultural Marketing Service (AMS)"), " — barge "
+                                    "freight rates, grain price spreads, and futures prices",
+                                ]),
+                                html.Li([
+                                    html.B("USDA World Agricultural Supply and Demand Estimates (WASDE)"),
+                                    " — current-year grain production estimates",
+                                ]),
+                                html.Li([
+                                    html.B("USDA National Agricultural Statistics Service (NASS) QuickStats"),
+                                    " — historical grain production",
+                                ]),
+                            ],
+                            style={**SECTION_SUBTEXT_STYLE, "padding-left": "20px", "margin": "0"}
                         ),
                     ]
                 ),
