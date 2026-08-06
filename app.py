@@ -827,6 +827,9 @@ SECTION_SUBTEXT_STYLE = {"margin": "0 0 10px 0", "font-size": "17px", "color": "
 CAPTION_STYLE = {"margin-top": "0px", "font-size": "14px", "color": "#777", "font-style": "italic", "font-family": "'DM Sans', sans-serif"}
 
 CROP_COLORS = {"corn": "#006837", "soybean": "#f1a340"}
+# current-year bar on the production chart is highlighted in a lighter shade of each
+# crop's own color, rather than one shared highlight color across both charts
+CURRENT_YEAR_HIGHLIGHT_COLORS = {"corn": "#78c679", "soybean": "#d95f0e"}
 
 
 def build_production_chart(crop):
@@ -845,17 +848,20 @@ def build_production_chart(crop):
         current_value = wasde_latest[col]
         years = years + [current_year]
         values = values + [current_value]
-        bar_colors = bar_colors + ["#d95f0e"]
+        bar_colors = bar_colors + [CURRENT_YEAR_HIGHLIGHT_COLORS[crop]]
         caption = f"The {current_year} estimate is from the {wasde_latest['report_label']} WASDE report."
 
     fig = go.Figure()
     fig.add_trace(go.Bar(x=years, y=values, marker_color=bar_colors, showlegend=False))
     fig.update_layout(
-        title=f"US <b>{label}</b> Production",
+        title=dict(
+            text=f"US <b>{label}</b> Production",
+            subtitle=dict(text="Source: U.S. Department of Agriculture National Agricultural Statistics Service", font=dict(size=10, color="#999")),
+        ),
         yaxis_title="Million bushels",
         xaxis=dict(type="category"),
         height=300,
-        margin=dict(l=50, r=20, t=40, b=25),
+        margin=dict(l=50, r=20, t=55, b=25),
     )
     return fig, caption
 
@@ -891,14 +897,17 @@ def build_futures_chart(crop):
         hovertemplate="$%{y:.2f}<extra></extra>",
     ))
     fig.update_layout(
-        title=dict(text=f"<b>{month_label} {crop_label}</b> Futures Contract Prices"),
+        title=dict(
+            text=f"<b>{month_label} {crop_label}</b> Futures Contract Prices",
+            subtitle=dict(text="Source: USDA Agricultural Marketing Service, MyMarketNews", font=dict(size=10, color="#999")),
+        ),
         yaxis_title="Price ($/bushel)",
         yaxis=dict(range=yaxis_range),
         xaxis=dict(range=[f"{thisyear}-01-01", f"{thisyear}-12-31"]),
         height=300,
         legend=dict(x=0.02, y=0.98, xanchor="left", yanchor="top",
                      bgcolor="rgba(255,255,255,0.6)", bordercolor="black", borderwidth=1),
-        margin=dict(l=50, r=20, t=40, b=40),
+        margin=dict(l=50, r=20, t=55, b=40),
         hovermode="x unified",
     )
     return fig
