@@ -45,6 +45,7 @@
     width: 200px;
     background: #1b3a5c;
     color: #fff;
+    font-family: 'DM Sans', sans-serif;
     font-size: 12px;
     line-height: 1.4;
     text-align: left;
@@ -58,4 +59,11 @@
 .layer-info-icon:hover .layer-info-tooltip {
     visibility: visible;
     opacity: 1;
+}
+
+/* Riverbed Surveys tooltip has a longer explanation plus a 3-line risk
+   breakdown, so it needs more width than the default 200px box to stay
+   readable instead of turning into a tall, narrow column. */
+.layer-info-icon .layer-info-tooltip-wide {
+    width: 300px;
 }

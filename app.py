@@ -1161,18 +1161,23 @@ def build_demand_crop_section(production_fig, production_caption, futures_fig):
     )
 
 
-def _layer_info_icon(source, description):
+def _layer_info_icon(source, description, wide=False):
     """Small '?' badge for a layer-toggle label; CSS-only hover tooltip (see custom.css)
-    shows the data source and a one-line explanation of what the layer means."""
+    shows the data source and an explanation of what the layer means. `wide` widens the
+    tooltip box for longer explanations (e.g. the riverbed-survey risk breakdown)."""
+    tooltip_class = "layer-info-tooltip layer-info-tooltip-wide" if wide else "layer-info-tooltip"
+    sources = source if isinstance(source, list) else [source]
+    source_children = [
+        html.Span(f"Source: {s}", style={"font-weight": "bold", "display": "block", "margin-bottom": "3px"})
+        for s in sources
+    ]
+    description_children = description if isinstance(description, list) else [description]
     return html.Span(
         [
             "?",
             html.Span(
-                [
-                    html.Span(f"Source: {source}", style={"font-weight": "bold", "display": "block", "margin-bottom": "3px"}),
-                    description,
-                ],
-                className="layer-info-tooltip",
+                [*source_children, *description_children],
+                className=tooltip_class,
             ),
         ],
         className="layer-info-icon",
@@ -1462,10 +1467,34 @@ app.layout = html.Div(
                                                 html.Div([
                                                     html.Span("Riverbed Surveys", style={"font-size": "16px"}),
                                                     _layer_info_icon(
-                                                        "USACE eHydro",
-                                                        "Recent multibeam surveys of the riverbed, color-coded "
-                                                        "by how much grounding risk they'd carry if the river "
-                                                        "dropped to a historic low-water stage."
+                                                        "U.S. Army Corps of Engineers eHydro",
+                                                        [
+                                                            html.Span(
+                                                                "Hydrographic surveys (“riverbed surveys”) "
+                                                                "measure the elevation of the riverbed. We analyze "
+                                                                "each survey to estimate how shallow the channel "
+                                                                "could get at that location if the river dropped "
+                                                                "to a historic low-water stage.",
+                                                                style={"display": "block", "margin-bottom": "6px"},
+                                                            ),
+                                                            html.Span([
+                                                                html.Span("High risk: ", style={"font-weight": "bold"}),
+                                                                "a 9-ft-deep path may not exist across the channel, "
+                                                                "so barge traffic is likely to be disrupted under "
+                                                                "low water conditions.",
+                                                            ], style={"display": "block", "margin-bottom": "4px"}),
+                                                            html.Span([
+                                                                html.Span("Medium risk: ", style={"font-weight": "bold"}),
+                                                                "a 9-ft-deep path should exist, but it may be "
+                                                                "narrow or prone to shoaling.",
+                                                            ], style={"display": "block", "margin-bottom": "4px"}),
+                                                            html.Span([
+                                                                html.Span("Low risk: ", style={"font-weight": "bold"}),
+                                                                "no barge navigation issues expected, even under "
+                                                                "low water.",
+                                                            ], style={"display": "block"}),
+                                                        ],
+                                                        wide=True,
                                                     ),
                                                     html.Div(
                                                         "Navigation Risk under Low Water:",
@@ -1498,8 +1527,19 @@ app.layout = html.Div(
                                                 "Stream Gage",
                                                 _layer_info_icon(
                                                     "USGS / NOAA-NWS",
-                                                    "Daily river stage (water level) readings at the St. "
-                                                    "Louis, Memphis, and Greenville gages."
+                                                    [
+                                                        html.Span(
+                                                            "Daily river stage (water level) readings at the "
+                                                            "St. Louis, Memphis, and Greenville gages.",
+                                                            style={"display": "block", "margin-bottom": "6px"},
+                                                        ),
+                                                        html.Span(
+                                                            "River stage measures the elevation of the river "
+                                                            "surface rather than the actual depth of the river.",
+                                                            style={"display": "block"},
+                                                        ),
+                                                    ],
+                                                    wide=True,
                                                 ),
                                             ]),
                                             "value": "stage",
@@ -1509,9 +1549,28 @@ app.layout = html.Div(
                                                 html.Img(src="/assets/dredge_marker.png", height="22", style={"vertical-align": "middle", "margin-right": "5px"}),
                                                 "Dredging",
                                                 _layer_info_icon(
-                                                    "USACE, via USCG Notice to Mariners",
-                                                    "Active and recent dredging operations reported in "
-                                                    "Broadcast Notices to Mariners."
+                                                    [
+                                                        "U.S. Coast Guard Broadcast Notice to Mariners (2026)",
+                                                        "Marine Cadastre AIS Data (2021–2025)",
+                                                    ],
+                                                    [
+                                                        html.Span(
+                                                            "Dredging is performed by the U.S. Army Corps of "
+                                                            "Engineers to remove sediment from the riverbed and "
+                                                            "deepen the channel for navigation.",
+                                                            style={"display": "block", "margin-bottom": "6px"},
+                                                        ),
+                                                        html.Span(
+                                                            "Recent dredging reports come from USCG notices.",
+                                                            style={"display": "block", "margin-bottom": "6px"},
+                                                        ),
+                                                        html.Span(
+                                                            "Exact dredging locations are available through 2025, "
+                                                            "calculated from AIS vessel location data.",
+                                                            style={"display": "block"},
+                                                        ),
+                                                    ],
+                                                    wide=True,
                                                 ),
                                             ]),
                                             "value": "dredging",
@@ -1521,8 +1580,10 @@ app.layout = html.Div(
                                                 html.Img(src="/assets/shoaling_marker.png", height="22", style={"vertical-align": "middle", "margin-right": "5px"}),
                                                 "Shoaling",
                                                 _layer_info_icon(
-                                                    "USACE, via USCG Notice to Mariners",
-                                                    "Reported shoaling (sediment buildup) restricting channel depth."
+                                                    "U.S. Coast Guard Broadcast Notice to Mariners",
+                                                    "Reports of shoaling (sediment buildup on the riverbed) "
+                                                    "indicate restricted channel depth and a higher risk of "
+                                                    "barge grounding."
                                                 ),
                                             ]),
                                             "value": "shoaling",
@@ -1539,9 +1600,25 @@ app.layout = html.Div(
                                                 }),
                                                 "Draft Restriction",
                                                 _layer_info_icon(
-                                                    "USACE, via USCG Notice to Mariners",
-                                                    "River segments under an active or upcoming maximum-draft "
-                                                    "restriction."
+                                                    "U.S. Coast Guard Broadcast Notice to Mariners",
+                                                    [
+                                                        html.Span(
+                                                            "The USCG imposes draft restrictions when water "
+                                                            "levels drop to critical lows.",
+                                                            style={"display": "block", "margin-bottom": "6px"},
+                                                        ),
+                                                        html.Span(
+                                                            "A barge's draft is how far it sits below the "
+                                                            "waterline. The deeper the draft, the greater the "
+                                                            "risk of grounding in shallow water.",
+                                                            style={"display": "block", "margin-bottom": "6px"},
+                                                        ),
+                                                        html.Span(
+                                                            "Operators reduce draft by loading less cargo.",
+                                                            style={"display": "block"},
+                                                        ),
+                                                    ],
+                                                    wide=True,
                                                 ),
                                             ]),
                                             "value": "draft",
@@ -1683,12 +1760,10 @@ app.layout = html.Div(
                                     "transportation, increase barge freight rates, and create "
                                     "uncertainty throughout the agricultural supply chain."
                                 ),
-                                " This dashboard brings together river conditions, navigation "
-                                "information, and grain market data to help users better understand "
-                                "transportation conditions on the Mississippi River system. It "
-                                "combines riverbed surveys, shoaling reports, dredging activity, "
-                                "river stages, barge freight rates, grain prices, and more into a "
-                                "single, interactive platform.",
+                                " This dashboard combines riverbed surveys, dredging activity, river "
+                                "stages, barge freight rates, grain prices, and more into a single, "
+                                "interactive platform that will help users better understand "
+                                "transportation conditions on the Mississippi River system.",
                             ],
                             style={**SECTION_SUBTEXT_STYLE, "margin-bottom": "18px"}
                         ),
