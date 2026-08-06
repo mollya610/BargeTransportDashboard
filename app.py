@@ -1030,7 +1030,10 @@ def build_compare_years_fig(df):
 
     fig.update_layout(
         title=dict(text="<b>Grain Production vs Grain Prices</b>", font=dict(size=19)),
-        xaxis=dict(title="Grain Price Index", title_font=dict(size=15), showticklabels=False,
+        # x-axis title is blanked here and rebuilt in HTML just below the graph (with a "?"
+        # info icon in front of it) -- Plotly's native axis title can't have an interactive
+        # hover icon placed next to it.
+        xaxis=dict(title="", showticklabels=False,
                     range=[x_center - x_half, x_center + x_half]),
         yaxis=dict(title="Grain Production Index", title_font=dict(size=15), showticklabels=False,
                     range=[y_center - y_half, y_center + y_half]),
@@ -1040,7 +1043,10 @@ def build_compare_years_fig(df):
         # r=150 is sized for the legend text itself (doesn't shrink with the plot), not the plot square.
         legend=dict(orientation="v", x=1.02, y=0.5, xanchor="left", yanchor="middle",
                      bgcolor="rgba(255,255,255,0.6)", bordercolor="black", borderwidth=1),
-        margin=dict(l=40, r=156, t=40, b=40),
+        # b is minimal since the x-axis title text itself was removed (rebuilt in HTML
+        # directly below the graph) and showticklabels=False means there's no tick text
+        # to leave room for either.
+        margin=dict(l=40, r=156, t=40, b=2),
     )
     return fig
 
@@ -1203,13 +1209,17 @@ def build_demand_crop_section(production_fig, production_caption, futures_fig):
 def _layer_info_icon(source, description, wide=False):
     """Small '?' badge for a layer-toggle label; CSS-only hover tooltip (see custom.css)
     shows the data source and an explanation of what the layer means. `wide` widens the
-    tooltip box for longer explanations (e.g. the riverbed-survey risk breakdown)."""
+    tooltip box for longer explanations (e.g. the riverbed-survey risk breakdown).
+    `source=None` skips the "Source: ..." line, for tooltips explaining a calculation
+    rather than a data source (e.g. the compare-years index)."""
     tooltip_class = "layer-info-tooltip layer-info-tooltip-wide" if wide else "layer-info-tooltip"
-    sources = source if isinstance(source, list) else [source]
-    source_children = [
-        html.Span(f"Source: {s}", style={"font-weight": "bold", "display": "block", "margin-bottom": "3px"})
-        for s in sources
-    ]
+    source_children = []
+    if source is not None:
+        sources = source if isinstance(source, list) else [source]
+        source_children = [
+            html.Span(f"Source: {s}", style={"font-weight": "bold", "display": "block", "margin-bottom": "3px"})
+            for s in sources
+        ]
     description_children = description if isinstance(description, list) else [description]
     return html.Span(
         [
@@ -1792,12 +1802,67 @@ app.layout = html.Div(
                                 "font-size": "18px", "color": "#888",
                             }
                         ),
+                        # Graph and its x-axis-title replacement share one relatively-positioned
+                        # wrapper so the label can be pinned with `position: absolute` a precise
+                        # number of pixels from the plot's bottom edge, instead of a negative
+                        # margin -- negative margins on a flex item nested inside the scrollable
+                        # compare-years-box (overflow-y: auto) were clipping/whiting-out the top
+                        # of the label text rather than cleanly overlapping the plot.
                         html.Div(
                             style={"display": "flex", "justify-content": "center"},
                             children=[
-                                dcc.Graph(
-                                    id="compare-years-scatter", figure=_compare_years_fig,
-                                    config={"displayModeBar": False, "responsive": False},
+                                html.Div(
+                                    style={"position": "relative", "width": "596px"},
+                                    children=[
+                                        dcc.Graph(
+                                            id="compare-years-scatter", figure=_compare_years_fig,
+                                            config={"displayModeBar": False, "responsive": False},
+                                        ),
+
+                                        # Replaces the (blanked) Plotly x-axis title -- Plotly
+                                        # can't put a hoverable "?" icon next to a native axis
+                                        # title. Padding mirrors the figure's own l/r margins
+                                        # (40px/156px out of 596px) so the icon + label line up
+                                        # under the actual plot area, not the whole graph width.
+                                        # `bottom` is a positive offset from the graph's bottom
+                                        # edge, i.e. it sits inside the figure's blank margin
+                                        # rather than below the graph entirely.
+                                        html.Div(
+                                            style={
+                                                "position": "absolute", "bottom": "7px", "left": "0",
+                                                "width": "596px", "box-sizing": "border-box",
+                                                "padding": "0 156px 0 40px",
+                                                "display": "flex", "justify-content": "center",
+                                                "align-items": "center", "gap": "5px",
+                                            },
+                                            children=[
+                                                _layer_info_icon(
+                                                    None,
+                                                    [
+                                                        html.Span(
+                                                            "Each axis combines corn and soybean "
+                                                            "conditions into one value.",
+                                                            style={"display": "block", "margin-bottom": "6px"},
+                                                        ),
+                                                        html.Span([
+                                                            html.Span("Price index: ", style={"font-weight": "bold"}),
+                                                            "Corn futures and soybean futures are scaled "
+                                                            "to similar levels and then averaged.",
+                                                        ], style={"display": "block", "margin-bottom": "6px"}),
+                                                        html.Span([
+                                                            html.Span("Production index: ", style={"font-weight": "bold"}),
+                                                            "Corn and soybean production is added together.",
+                                                        ], style={"display": "block"}),
+                                                    ],
+                                                    wide=True,
+                                                ),
+                                                html.Span(
+                                                    "Grain Price Index",
+                                                    style={"font-size": "15px", "color": "#444", "font-family": "Arial, sans-serif"}
+                                                ),
+                                            ]
+                                        ),
+                                    ]
                                 ),
                             ]
                         ),
