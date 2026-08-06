@@ -67,3 +67,118 @@
 .layer-info-icon .layer-info-tooltip-wide {
     width: 300px;
 }
+
+/* ==========================================================================
+   Mobile layout (phones / narrow tablets)
+   The desktop layout is built from fixed-px floating panels over a full-height
+   map, which is fine on a laptop screen but overflows or clips on a phone.
+   Everything below only kicks in under 768px; desktop is untouched. Most of
+   these panels get their base look from inline `style={}` dicts set in
+   app.py's Python layout (and swapped between hidden/visible dicts by
+   callbacks), so overriding them here requires `!important`.
+   ========================================================================== */
+@media (max-width: 768px) {
+
+    /* Header: title + nav no longer fit in one row, so stack them instead of
+       letting the row overflow sideways */
+    #app-header {
+        flex-direction: column !important;
+        align-items: flex-start !important;
+        height: auto !important;
+        padding: 10px 14px !important;
+        gap: 8px;
+    }
+    #app-title {
+        margin: 0 !important;
+        font-size: 18px !important;
+        letter-spacing: 0.5px !important;
+    }
+    #nav-links {
+        width: 100%;
+        flex-wrap: wrap;
+        gap: 4px 14px;
+    }
+    #nav-links button {
+        margin-left: 0 !important;
+        font-size: 12px !important;
+        padding: 4px 2px !important;
+    }
+
+    /* Map fills whatever's left under the now-taller (wrapped) header */
+    #map-container {
+        height: 85vh !important;
+    }
+
+    /* Year/layers control box: don't let it eat most of a phone's width, and
+       let its two children fill that narrower box instead of their desktop
+       fixed widths (220px/240px) */
+    #map-controls {
+        max-width: 76vw !important;
+        max-height: 65vh;
+        overflow-y: auto;
+    }
+    #year-select-wrapper, #layer-toggle-wrapper {
+        width: 100% !important;
+    }
+
+    /* Floating detail panels (notice/survey/gage click-throughs) are sized in
+       px for a desktop map; cap them so they can't run off a phone screen */
+    #notice-detail-box,
+    #gage-detail-box,
+    #survey-detail-banner,
+    #survey-legend-box,
+    #current-gage-box,
+    #survey-zoom-memo {
+        max-width: 78vw !important;
+        width: auto !important;
+    }
+
+    /* Gage-frequency panel reserves a 330px gap on its right for the survey
+       legend column on desktop -- on a phone that leaves almost no room, so
+       just span the width instead */
+    #gage-freq-panel {
+        left: 10px !important;
+        right: 10px !important;
+    }
+
+    /* Price-plots slide-out panel: 420px is wider than most phones, which
+       pushes its left edge off-screen. Only applies when open (the closed
+       state is width:0, matched by the "420px" open-state style instead) */
+    #plots-panel[style*="420px"] {
+        width: 90vw !important;
+    }
+    #plots-toggle {
+        font-size: 11px !important;
+        padding: 8px 5px !important;
+    }
+
+    /* Full-page sections: desktop padding is generous, phones need it tight */
+    #demand-page, #about-page {
+        padding: 16px 14px !important;
+    }
+
+    /* Demand-page explanation boxes and chart columns are flex items with a
+       400px min-width for the desktop side-by-side layout -- on a phone that
+       min-width is wider than the screen itself, forcing horizontal scroll.
+       Let them shrink to full-width single-column instead. */
+    .demand-explanation-box, .crop-chart-col {
+        min-width: 0 !important;
+        width: 100% !important;
+    }
+
+    /* Compare-years modal holds fixed-width (596px) Plotly figures that won't
+       resize themselves -- cap the modal to the viewport and let the figures
+       scroll horizontally inside it rather than blowing out the page */
+    #compare-years-box {
+        width: 92vw !important;
+        max-width: 92vw !important;
+        padding: 30px 10px 16px 10px !important;
+        overflow-x: auto;
+    }
+    #compare-years-toggle {
+        font-size: 14px !important;
+        padding: 10px 16px !important;
+        width: 100%;
+        box-sizing: border-box;
+    }
+}

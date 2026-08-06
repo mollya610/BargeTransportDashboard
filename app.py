@@ -1152,6 +1152,7 @@ def build_demand_explanation_boxes():
         style={"display": "flex", "gap": "30px", "flex-wrap": "wrap", "margin-bottom": "28px"},
         children=[
             html.Div(
+                className="demand-explanation-box",
                 style=DEMAND_EXPLANATION_BOX_STYLE,
                 children=[
                     html.H4("1. How much grain is the US expected to produce?", style=SECTION_HEADER_STYLE),
@@ -1162,6 +1163,7 @@ def build_demand_explanation_boxes():
                 ]
             ),
             html.Div(
+                className="demand-explanation-box",
                 style=DEMAND_EXPLANATION_BOX_STYLE,
                 children=[
                     html.H4("2. What does global grain demand look like?", style=SECTION_HEADER_STYLE),
@@ -1184,6 +1186,7 @@ def build_demand_crop_section(production_fig, production_caption, futures_fig):
                 style={"display": "flex", "gap": "30px", "flex-wrap": "wrap"},
                 children=[
                     html.Div(
+                        className="crop-chart-col",
                         style={"flex": "1", "min-width": "400px"},
                         children=[
                             dcc.Graph(figure=production_fig, config={"displayModeBar": False}),
@@ -1191,6 +1194,7 @@ def build_demand_crop_section(production_fig, production_caption, futures_fig):
                         ]
                     ),
                     html.Div(
+                        className="crop-chart-col",
                         style={"flex": "1", "min-width": "400px"},
                         children=[
                             dcc.Graph(figure=futures_fig, config={"displayModeBar": False}),
@@ -1238,6 +1242,7 @@ app.layout = html.Div(
 
         # Title bar
         html.Div(
+            id="app-header",
             style={
                 "display": "flex", "align-items": "center", "justify-content": "space-between",
                 "width": "100%", "box-sizing": "border-box",
@@ -1247,6 +1252,7 @@ app.layout = html.Div(
             children=[
                 html.H2(
                     "Grain Transportation Conditions",
+                    id="app-title",
                     style={
                         "margin": "0 0 0 30px", "color": "white",
                         "font-family": "'DM Sans', sans-serif",
@@ -1255,6 +1261,7 @@ app.layout = html.Div(
                     }
                 ),
                 html.Div(
+                    id="nav-links",
                     style={"display": "flex", "align-items": "center"},
                     children=[
                         html.Button("About", id="nav-about", n_clicks=0, style=NAV_LINK_INACTIVE),
@@ -1279,6 +1286,7 @@ app.layout = html.Div(
             style=RIVER_PAGE_VISIBLE,
             children=[
             html.Div(
+            id="map-container",
             style={"position": "relative", "width": "100%", "height": "92vh"},
             children=[
 
@@ -1474,6 +1482,7 @@ app.layout = html.Div(
 
                 # Controls overlay, floating on top of the map
                 html.Div(
+                    id="map-controls",
                     style={
                         "position": "absolute",
                         "top": "15px",
@@ -1490,6 +1499,7 @@ app.layout = html.Div(
                     children=[
                         # Year dropdown
                         html.Div(
+                            id="year-select-wrapper",
                             style={"width": "220px"},
                             children=[
                                 html.Label("Select Year"),
@@ -1505,6 +1515,7 @@ app.layout = html.Div(
 
                         # Layers checkboxes
                         html.Div(
+                            id="layer-toggle-wrapper",
                             style={"width": "240px"},
                             children=[
                                 html.Label("Layers", style={"font-weight": "bold", "margin-bottom": "6px", "display": "block"}),
