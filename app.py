@@ -1028,6 +1028,18 @@ def build_compare_years_fig(df):
     fig.add_vline(x=x_center, line_dash="dot", line_color="#bbb")
     fig.add_hline(y=y_center, line_dash="dot", line_color="#bbb")
 
+    # Brief how-to-read-this-chart note in the right margin, above the legend (which is
+    # vertically centered at paper y=0.5). Line breaks are manual (<br>) rather than
+    # relying on the `width` auto-wrap property, since that left the text running off
+    # the page in the ~150px margin reserved by margin.r below.
+    fig.add_annotation(
+        xref="paper", yref="paper", x=1.04, y=0.70, xanchor="left", yanchor="bottom",
+        align="center", showarrow=False, width=140,
+        text="Years closer to<br>the <b>top right</b><br>had higher barge<br>demand, making a<br>"
+             "harvest-season<br>rate spike more<br>likely.",
+        font=dict(size=12, color="#666"),
+    )
+
     fig.update_layout(
         title=dict(text="<b>Grain Production vs Grain Prices</b>", font=dict(size=19)),
         # x-axis title is blanked here and rebuilt in HTML just below the graph (with a "?"
