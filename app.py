@@ -646,6 +646,37 @@ PLOTS_PANEL_OPEN = {
     "overflow-y": "auto",
 }
 
+# Style constants for the slide-out 2026 insights panel — same mechanism as
+# the plots panel above, just a second tab stacked on the same map edge
+INSIGHTS_PANEL_WIDTH = "380px"
+INSIGHTS_PANEL_CLOSED = {
+    "position": "absolute", "top": "0", "right": "0", "height": "100%",
+    "width": "0", "overflow": "hidden",
+    "background": "rgba(255,255,255,0.97)",
+    "box-shadow": "none",
+    "transition": "width 0.25s ease",
+    "zIndex": "16",
+}
+INSIGHTS_PANEL_OPEN = {
+    **INSIGHTS_PANEL_CLOSED,
+    "width": INSIGHTS_PANEL_WIDTH,
+    "box-shadow": "-2px 0 6px rgba(0,0,0,0.3)",
+    # extra right padding keeps text from running under the toggle tab, which
+    # floats on top of the panel at the same right edge while it's open
+    "padding": "24px 60px 24px 24px",
+    "overflow-y": "auto",
+}
+
+# Shared styling for the two right-edge tabs (insights + price plots)
+INSIGHTS_TOGGLE_LABEL = ["2026", html.Br(), "Insights", html.Br(), "Summary"]
+PLOTS_TOGGLE_LABEL = ["View", html.Br(), "Price", html.Br(), "Plots"]
+TAB_BASE_STYLE = {
+    "background": "#1b3a5c", "color": "white", "border": "2px solid white",
+    "border-radius": "6px 0 0 6px", "padding": "12px 8px", "cursor": "pointer",
+    "font-size": "15px", "text-align": "center",
+}
+TAB_HIDDEN_STYLE = {**TAB_BASE_STYLE, "display": "none"}
+
 # Colors for each depth bin polygon overlay (deep → shallow)
 DEPTH_POLY_COLORS = {
     ">20 ft":      "#084594",
@@ -1288,7 +1319,7 @@ app.layout = html.Div(
             ]
         ),
 
-        dcc.Store(id="plots-panel-store", data=False),
+        dcc.Store(id="active-panel-store", data=None),
         dcc.Store(id="notice-detail-store", data=None),
         dcc.Store(id="selected-survey-store", data=None),
         dcc.Store(id="selected-gage-store", data=None),
@@ -1712,26 +1743,55 @@ app.layout = html.Div(
 
 
 
-                # Tab to open/close the plots panel, on the right edge of the map
-                html.Button(
-                    ["View", html.Br(), "Price", html.Br(), "Plots"],
-                    id="plots-toggle",
-                    n_clicks=0,
+                # Tabs to open/close the insights and plots panels, stacked on
+                # the right edge of the map. The pair is centered together as
+                # one group (translateY(-50%) on the wrapper, not each tab) so
+                # adding the insights tab above didn't require re-centering math.
+                html.Div(
+                    id="right-tabs-stack",
                     style={
-                        "position": "absolute",
-                        "top": "50%",
-                        "right": "0",
-                        "transform": "translateY(-50%)",
-                        "zIndex": "20",
-                        "background": "#1b3a5c",
-                        "color": "white",
-                        "border": "2px solid white",
-                        "border-radius": "6px 0 0 6px",
-                        "padding": "12px 8px",
-                        "cursor": "pointer",
-                        "font-size": "15px",
-                        "text-align": "center",
-                    }
+                        "position": "absolute", "top": "50%", "right": "0",
+                        "transform": "translateY(-50%)", "zIndex": "20",
+                        "display": "flex", "flex-direction": "column", "gap": "18px",
+                    },
+                    children=[
+                        html.Button(
+                            INSIGHTS_TOGGLE_LABEL,
+                            id="insights-toggle",
+                            n_clicks=0,
+                            style=TAB_BASE_STYLE,
+                        ),
+                        html.Button(
+                            PLOTS_TOGGLE_LABEL,
+                            id="plots-toggle",
+                            n_clicks=0,
+                            style=TAB_BASE_STYLE,
+                        ),
+                    ]
+                ),
+
+                # Insights panel, slides in over the map
+                html.Div(
+                    id="insights-panel",
+                    style=INSIGHTS_PANEL_CLOSED,
+                    children=[
+                        html.H4("2026 Insights Summary", style=SECTION_HEADER_STYLE),
+                        html.P(
+                            "River stage is trending downward and running below this week's "
+                            "average, but survey data shows the Army Corps has kept the channel "
+                            "well maintained heading into fall. A few spots are worth watching: "
+                            "just south of St. Louis, plus smaller trouble spots near Rosedale and "
+                            "Lake Providence. Overall, the river is well prepared for low water.",
+                            style=SECTION_SUBTEXT_STYLE,
+                        ),
+                        html.P(
+                            "Barge rates are already running higher than typical for this time of "
+                            "year, with forward barge contracts at their highest ever rate for this "
+                            "time of year, and grain barge demand is expected to remain moderate to "
+                            "high through harvest.",
+                            style=SECTION_SUBTEXT_STYLE,
+                        ),
+                    ]
                 ),
 
                 # Plots panel, slides in over the map
@@ -1993,23 +2053,51 @@ def close_welcome(n_clicks):
 
 
 # --------------------------------------------------
-# PLOTS PANEL TOGGLE
+# PLOTS / INSIGHTS PANEL TOGGLES
 # --------------------------------------------------
-
+# The two tabs share one right-edge stack, and only one panel makes sense
+# open at a time -- clicking one opens its panel, hides the other tab (so
+# there's nothing floating over the open panel's text), and shows just a
+# close option. Closing brings both tabs back. A single callback keyed off
+# which tab fired (dash.ctx.triggered_id) keeps that shared state consistent,
+# since two independent callbacks can't both write to the sibling tab's style.
 
 @app.callback(
     Output("plots-panel", "style"),
-    Output("plots-panel-store", "data"),
+    Output("insights-panel", "style"),
+    Output("plots-toggle", "style"),
+    Output("insights-toggle", "style"),
     Output("plots-toggle", "children"),
+    Output("insights-toggle", "children"),
+    Output("active-panel-store", "data"),
     Input("plots-toggle", "n_clicks"),
-    State("plots-panel-store", "data"),
+    Input("insights-toggle", "n_clicks"),
+    State("active-panel-store", "data"),
     prevent_initial_call=True
 )
-def toggle_plots_panel(n_clicks, is_open):
-    new_state = not is_open
-    style = PLOTS_PANEL_OPEN if new_state else PLOTS_PANEL_CLOSED
-    label = "✕ Close" if new_state else ["View", html.Br(), "Price", html.Br(), "Plots"]
-    return style, new_state, label
+def toggle_right_panels(plots_clicks, insights_clicks, active_panel):
+    clicked = dash.ctx.triggered_id
+    new_active = None if active_panel == clicked else clicked
+
+    plots_panel_style = PLOTS_PANEL_OPEN if new_active == "plots-toggle" else PLOTS_PANEL_CLOSED
+    insights_panel_style = INSIGHTS_PANEL_OPEN if new_active == "insights-toggle" else INSIGHTS_PANEL_CLOSED
+
+    if new_active is None:
+        plots_tab_style, insights_tab_style = TAB_BASE_STYLE, TAB_BASE_STYLE
+        plots_label, insights_label = PLOTS_TOGGLE_LABEL, INSIGHTS_TOGGLE_LABEL
+    elif new_active == "plots-toggle":
+        plots_tab_style, insights_tab_style = TAB_BASE_STYLE, TAB_HIDDEN_STYLE
+        plots_label, insights_label = "✕ Close", INSIGHTS_TOGGLE_LABEL
+    else:
+        plots_tab_style, insights_tab_style = TAB_HIDDEN_STYLE, TAB_BASE_STYLE
+        plots_label, insights_label = PLOTS_TOGGLE_LABEL, "✕ Close"
+
+    return (
+        plots_panel_style, insights_panel_style,
+        plots_tab_style, insights_tab_style,
+        plots_label, insights_label,
+        new_active,
+    )
 
 
 # --------------------------------------------------

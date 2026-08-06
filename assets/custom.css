@@ -128,6 +128,7 @@
     #gage-detail-box,
     #survey-detail-banner,
     #survey-legend-box,
+    #insights-2026-box,
     #current-gage-box,
     #survey-zoom-memo {
         max-width: 78vw !important;
@@ -151,12 +152,15 @@
         right: 10px !important;
     }
 
-    /* Price-plots slide-out panel: 420px is wider than most phones, which
-       pushes its left edge off-screen. Only applies when open (the closed
-       state is width:0, matched by the "420px" open-state style instead) */
-    #plots-panel[style*="420px"] {
+    /* Price-plots and insights-summary slide-out panels: their desktop widths
+       are wider than most phones, which pushes their left edge off-screen.
+       Only applies when open (the closed state is width:0, matched by the
+       open-state widths instead) */
+    #plots-panel[style*="420px"],
+    #insights-panel[style*="380px"] {
         width: 90vw !important;
     }
+    #insights-toggle,
     #plots-toggle {
         font-size: 11px !important;
         padding: 8px 5px !important;
