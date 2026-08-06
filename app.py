@@ -1153,6 +1153,24 @@ def build_demand_crop_section(production_fig, production_caption, futures_fig):
     )
 
 
+def _layer_info_icon(source, description):
+    """Small '?' badge for a layer-toggle label; CSS-only hover tooltip (see custom.css)
+    shows the data source and a one-line explanation of what the layer means."""
+    return html.Span(
+        [
+            "?",
+            html.Span(
+                [
+                    html.Span(f"Source: {source}", style={"font-weight": "bold", "display": "block", "margin-bottom": "3px"}),
+                    description,
+                ],
+                className="layer-info-tooltip",
+            ),
+        ],
+        className="layer-info-icon",
+    )
+
+
 _corn_production_fig, _corn_production_caption = build_production_chart("corn")
 _soybean_production_fig, _soybean_production_caption = build_production_chart("soybean")
 _corn_futures_fig = build_futures_chart("corn")
@@ -1406,6 +1424,12 @@ app.layout = html.Div(
                                             "label": html.Span([
                                                 html.Div([
                                                     html.Span("Riverbed Surveys", style={"font-size": "16px"}),
+                                                    _layer_info_icon(
+                                                        "USACE eHydro",
+                                                        "Recent multibeam surveys of the riverbed, color-coded "
+                                                        "by how much grounding risk they'd carry if the river "
+                                                        "dropped to a historic low-water stage."
+                                                    ),
                                                     html.Div(
                                                         "Navigation Risk under Low Water:",
                                                         style={"font-size": "13px", "display": "block", "width": "100%"}
@@ -1435,6 +1459,11 @@ app.layout = html.Div(
                                             "label": html.Span([
                                                 html.Img(src="/assets/raindrop.png", height="22", style={"vertical-align": "middle", "margin-right": "5px"}),
                                                 "Stream Gage",
+                                                _layer_info_icon(
+                                                    "USGS / NOAA-NWS",
+                                                    "Daily river stage (water level) readings at the St. "
+                                                    "Louis, Memphis, and Greenville gages."
+                                                ),
                                             ]),
                                             "value": "stage",
                                         },
@@ -1442,6 +1471,11 @@ app.layout = html.Div(
                                             "label": html.Span([
                                                 html.Img(src="/assets/dredge_marker.png", height="22", style={"vertical-align": "middle", "margin-right": "5px"}),
                                                 "Dredging",
+                                                _layer_info_icon(
+                                                    "USACE, via USCG Notice to Mariners",
+                                                    "Active and recent dredging operations reported in "
+                                                    "Broadcast Notices to Mariners."
+                                                ),
                                             ]),
                                             "value": "dredging",
                                         },
@@ -1449,6 +1483,10 @@ app.layout = html.Div(
                                             "label": html.Span([
                                                 html.Img(src="/assets/shoaling_marker.png", height="22", style={"vertical-align": "middle", "margin-right": "5px"}),
                                                 "Shoaling",
+                                                _layer_info_icon(
+                                                    "USACE, via USCG Notice to Mariners",
+                                                    "Reported shoaling (sediment buildup) restricting channel depth."
+                                                ),
                                             ]),
                                             "value": "shoaling",
                                         },
@@ -1463,6 +1501,11 @@ app.layout = html.Div(
                                                     "border-radius": "2px",
                                                 }),
                                                 "Draft Restriction",
+                                                _layer_info_icon(
+                                                    "USACE, via USCG Notice to Mariners",
+                                                    "River segments under an active or upcoming maximum-draft "
+                                                    "restriction."
+                                                ),
                                             ]),
                                             "value": "draft",
                                         },
@@ -2077,6 +2120,7 @@ def update_map(year, layers, selected_survey, selected_shoaling_mile):
     # river stage gage dots
     if "stage" in layers:
         gage_names = list(RIVER_GAGES.keys())
+        gage_source_labels = {"usgs": "USGS", "nws": "NOAA/NWS"}
         fig.add_trace(go.Scattermap(
             lon=[info["lon"] for info in RIVER_GAGES.values()],
             lat=[info["lat"] for info in RIVER_GAGES.values()],
@@ -2087,7 +2131,12 @@ def update_map(year, layers, selected_survey, selected_shoaling_mile):
             textfont=dict(size=13, color="white"),
             showlegend=False,
             customdata=[["gage", gage_name] for gage_name in gage_names],
-            hovertext=[f"<b>{gage_name} River Stage</b><br><i>Click for current reading</i>" for gage_name in gage_names],
+            hovertext=[
+                f"<b>{gage_name} River Stage</b><br>"
+                f"Source: {gage_source_labels.get(info['source'], info['source'].upper())}<br>"
+                f"<i>Click for current reading</i>"
+                for gage_name, info in RIVER_GAGES.items()
+            ],
             hoverinfo="text",
             name="River Stage Gages",
         ))
@@ -2589,13 +2638,16 @@ def render_gage_panel(data):
         _legend_row({"height": "10px", "background": "rgba(144,202,249,0.3)", "border-radius": "2px"}, "HISTORICAL 25-75TH PERCENTILE"),
     ], style={"margin-bottom": "8px"})
 
+    source_label = "USGS" if RIVER_GAGES.get(gage_name, {}).get("source") == "usgs" else "NOAA/NWS"
+
     content = [
         html.Div(gage_name, style={"font-size": "18px", "font-weight": "bold", "margin-bottom": "4px"}),
         html.Div([
             html.Span("Current stage: ", style={"font-size": "13px", "color": "#444"}),
             html.Span(f"{current_stage:.1f} ft", style={"font-size": "16px", "font-weight": "bold"}),
             html.Span(today_note, style={"font-size": "11px", "color": "#888"}),
-        ], style={"margin-bottom": "10px"}),
+        ], style={"margin-bottom": "4px"}),
+        html.Div(f"Source: {source_label}", style={"font-size": "11px", "color": "#888", "margin-bottom": "10px"}),
         legend_rows,
     ]
 
@@ -2683,14 +2735,18 @@ def update_barge_rate_plot(year):
             mode="lines",fill="tonexty",fillcolor="rgba(160,160,160,0.3)",
             name="75% Range",line=dict(width=0),hoverinfo="skip",showlegend=True)
     )
-    fig.update_layout(title=title,
+    fig.update_layout(
+        title=dict(
+            text=title,
+            subtitle=dict(text="Source: U.S. Department of Agriculture Agricultural Marketing Service", font=dict(size=10, color="#999")),
+        ),
         yaxis_title="$/ton",
         yaxis=dict(range=[barge_rates['stlrate_per_ton'].min(), barge_rates['stlrate_per_ton'].max()], hoverformat=".2f"),
             height=300,legend=dict(
             x=0.02,y=0.98,xanchor="left",yanchor="top",traceorder="normal",
             font=dict(size=10),
             bgcolor="rgba(255,255,255,0.6)",bordercolor="black",borderwidth=1),
-        margin=dict(l=50, r=20, t=40, b=40),
+        margin=dict(l=50, r=20, t=55, b=40),
         hovermode="x unified"
     )
     return fig
@@ -2727,14 +2783,18 @@ def update_cornprice_plot(year):
             mode="lines",fill="tonexty",fillcolor="rgba(160,160,160,0.3)",
             name="75% Range",line=dict(width=0),hoverinfo="skip",showlegend=False)
     )
-    fig.update_layout(title=title,
+    fig.update_layout(
+        title=dict(
+            text=title,
+            subtitle=dict(text="Source: U.S. Department of Agriculture Agricultural Marketing Service", font=dict(size=10, color="#999")),
+        ),
         yaxis_title="Price ($/bushel)",
         yaxis=dict(range=[corn_price['gulf_corn_price'].min()-0.1, corn_price['gulf_corn_price'].max()+0.1], hoverformat=".2f"),
         height=300,legend=dict(
            x=0.02,y=0.98,xanchor="left",yanchor="top",traceorder="normal",
            font=dict(size=10),
            bgcolor="rgba(255,255,255,0.6)",bordercolor="black",borderwidth=1),
-        margin=dict(l=50, r=20, t=40, b=40),
+        margin=dict(l=50, r=20, t=55, b=40),
         hovermode="x unified"
     )
     return fig
@@ -2749,7 +2809,7 @@ def update_soyprice_plot(year):
         df365 = soy_price[(soy_price["date"] >= start_date) &(soy_price["date"] <= end_date)]
     else:
         df365 = soy_price[soy_price['year']==year]
-    title = "Gulf Soy Price"
+    title = "Gulf Soybean Price"
     line_name = "Past 52 Weeks" if year == thisyear else str(year)
 
     fig = go.Figure()
@@ -2770,14 +2830,18 @@ def update_soyprice_plot(year):
             mode="lines",fill="tonexty",fillcolor="rgba(160,160,160,0.3)",
             name="75% Range",line=dict(width=0),hoverinfo="skip",showlegend=False)
     )
-    fig.update_layout(title=title,
+    fig.update_layout(
+        title=dict(
+            text=title,
+            subtitle=dict(text="Source: U.S. Department of Agriculture Agricultural Marketing Service", font=dict(size=10, color="#999")),
+        ),
         yaxis_title="Price ($/bushel)",
         yaxis=dict(range=[soy_price['gulf_soy_price'].min()-0.1, soy_price['gulf_soy_price'].max()+0.1], hoverformat=".2f"),
         height=300,legend=dict(
            x=0.02,y=0.98,xanchor="left",yanchor="top",traceorder="normal",
            font=dict(size=10),
            bgcolor="rgba(255,255,255,0.6)",bordercolor="black",borderwidth=1),
-        margin=dict(l=50, r=20, t=40, b=40),
+        margin=dict(l=50, r=20, t=55, b=40),
         hovermode="x unified"
     )
     return fig

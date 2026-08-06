@@ -12,3 +12,50 @@
 #layer-toggle > label:first-child input[type="checkbox"] {
     margin-top: 3px;
 }
+
+/* "?" info badge next to each layer-toggle label -- pure CSS hover tooltip, no
+   click handling needed (and none wanted, since these labels sit inside the
+   checkbox's <label> and a click would toggle the layer). */
+.layer-info-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 14px;
+    height: 14px;
+    margin-left: 6px;
+    border-radius: 50%;
+    border: 1px solid #888;
+    color: #888;
+    font-size: 10px;
+    line-height: 1;
+    cursor: help;
+    position: relative;
+    flex-shrink: 0;
+    vertical-align: middle;
+}
+
+.layer-info-icon .layer-info-tooltip {
+    visibility: hidden;
+    opacity: 0;
+    position: absolute;
+    z-index: 1000;
+    left: 20px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 200px;
+    background: #1b3a5c;
+    color: #fff;
+    font-size: 12px;
+    line-height: 1.4;
+    text-align: left;
+    padding: 8px 10px;
+    border-radius: 6px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.25);
+    transition: opacity 0.15s ease;
+    pointer-events: none;
+}
+
+.layer-info-icon:hover .layer-info-tooltip {
+    visibility: visible;
+    opacity: 1;
+}
