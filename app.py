@@ -209,8 +209,19 @@ memphis_stage = river_stage_df[
     (river_stage_df["gage"] == "Memphis") & (river_stage_df["date"].dt.year >= 2015)
 ].copy()
 memphis_stage["week_no"] = memphis_stage["date"].dt.isocalendar().week
-memphis_stage["year"] = memphis_stage["date"].dt.year
+# ISO week, not calendar year, since the last few days of December can fall in ISO
+# week 1 of the following year (and the first days of January in week 52/53 of the
+# previous year) -- pairing that week_no with dt.year instead of the matching ISO
+# year misfiled those boundary days into the wrong year's trace, creating a false
+# jump at the start/end of each year's line.
+memphis_stage["year"] = memphis_stage["date"].dt.isocalendar().year
 memphis_stage = memphis_stage.sort_values("date").reset_index(drop=True)
+# Gage readings are daily, but _year_overlay_traces plots against week_no (an integer),
+# same as the genuinely-weekly barge-rate/price series it was built for. Left as daily,
+# every reading in a week stacks on the same x position and the line zigzags before
+# jumping to the next week, reading as "choppy". Collapse to one point per week (the
+# week's last reading) so it plots as a smooth weekly line like the other charts.
+memphis_stage = memphis_stage.groupby(["year", "week_no"], as_index=False).last()
 
 _climatology_csv = Path("river_stage_climatology.csv")
 if _climatology_csv.exists():
