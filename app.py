@@ -1398,6 +1398,7 @@ app.layout = html.Div(
                 # above the legend so its close button (which dismisses both) reads
                 # as belonging to the pair instead of sitting far away from the legend
                 html.Div(
+                    id="survey-panels-stack",
                     style={
                         "position": "absolute", "top": "15px", "right": "15px", "zIndex": "25",
                         "display": "flex", "flex-direction": "column", "align-items": "flex-end",

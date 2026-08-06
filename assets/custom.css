@@ -109,12 +109,13 @@
         height: 85vh !important;
     }
 
-    /* Year/layers control box: don't let it eat most of a phone's width, and
-       let its two children fill that narrower box instead of their desktop
-       fixed widths (220px/240px) */
+    /* Year/layers control box: the desktop version (year dropdown + 5-layer
+       checklist, one of which has a full risk-tier breakdown) is tall enough
+       to cover most of a phone screen. Cap it to a fraction of the viewport
+       in both directions and let it scroll internally instead. */
     #map-controls {
-        max-width: 76vw !important;
-        max-height: 65vh;
+        max-width: 58vw !important;
+        max-height: 42vh !important;
         overflow-y: auto;
     }
     #year-select-wrapper, #layer-toggle-wrapper {
@@ -131,6 +132,15 @@
     #survey-zoom-memo {
         max-width: 78vw !important;
         width: auto !important;
+    }
+
+    /* Survey banner + depth legend + current-gage + zoom-memo stack together
+       top-right when a survey dot is tapped -- on a short phone screen that
+       whole column can run past the bottom of the viewport. Cap the stack as
+       a group and let it scroll rather than spilling off-screen. */
+    #survey-panels-stack {
+        max-height: 55vh !important;
+        overflow-y: auto !important;
     }
 
     /* Gage-frequency panel reserves a 330px gap on its right for the survey
