@@ -893,13 +893,20 @@ def build_production_chart(crop):
     color = CROP_COLORS[crop]
 
     hist = grain_production_history[["year", col]].dropna().sort_values("year") if col in grain_production_history else pd.DataFrame(columns=["year", col])
-    years = hist["year"].tolist()
-    values = hist[col].tolist()
-    bar_colors = [color] * len(years)
 
     caption = ""
     if wasde_latest is not None:
         current_year = int(str(wasde_latest["marketing_year"]).split("/")[0])
+        # The WASDE estimate is always the freshest number for the current
+        # marketing year, so drop any history row for that year rather than
+        # showing both as separate bars.
+        hist = hist[hist["year"] != current_year]
+
+    years = hist["year"].tolist()
+    values = hist[col].tolist()
+    bar_colors = [color] * len(years)
+
+    if wasde_latest is not None:
         current_value = wasde_latest[col]
         years = years + [current_year]
         values = values + [current_value]

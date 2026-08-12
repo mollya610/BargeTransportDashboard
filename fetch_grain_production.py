@@ -58,6 +58,12 @@ def fetch_production_history():
         records = _fetch(short_desc, year_ge, year_le, api_key)
         for rec in records:
             year = int(rec["year"])
+            if year > year_le:
+                # NASS QuickStats has occasionally returned an in-season
+                # forecast for the current crop year despite the year__LE
+                # filter; the not-yet-harvested year's number always comes
+                # from fetch_wasde.py instead, so drop it here defensively.
+                continue
             value = float(str(rec["Value"]).replace(",", ""))
             by_year.setdefault(year, {})[f"{crop}_production_million_bu"] = value / 1_000_000
 
