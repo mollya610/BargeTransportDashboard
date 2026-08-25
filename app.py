@@ -3,6 +3,7 @@ import re
 import glob
 import json
 import textwrap
+import functools
 from pathlib import Path
 import dash
 from dash import dcc, html, Input, Output, State
@@ -10,7 +11,7 @@ import geopandas as gpd
 import plotly.graph_objects as go
 from shapely.ops import linemerge
 from shapely.ops import unary_union
-from datetime import date
+from datetime import date, datetime
 import numpy as np
 import pandas as pd
 from shapely import wkt
@@ -97,7 +98,10 @@ bathy["year"] = bathy["year"].astype(int)
 bathy["date_dt"] = pd.to_datetime(bathy["date"]).dt.tz_localize(None)
 
 years = sorted(bathy["year"].unique())
-years = [int(y) for y in years if int(y) >= 2021]
+# Current year is excluded -- Historic Conditions covers completed years only, since the
+# current year's up-to-date picture is what the Current Conditions tab is for.
+years = [int(y) for y in years if 2021 <= int(y) < date.today().year]
+DEFAULT_HISTORIC_YEAR = years[-1]  # most recent completed year -- Historic Conditions opens here
 
 bathy["at_risk_eff"] = bathy["at_risk"].fillna("low") if "at_risk" in bathy.columns else "low"
 
@@ -162,6 +166,12 @@ def _uncertainty_for_mile(mile):
 # dredging at a named location instead of a mile marker, a manually entered lat/lon
 CATEGORY_LABELS = {"dredging": "Dredging", "shoaling": "Shoaling", "draft": "Draft Restriction", "other": "Other"}
 CATEGORY_COLORS = {"dredging": "#4a3000", "shoaling": "#fdd734", "draft": "#8c510a", "other": "#e6a817"}
+
+# Default map view (any map-based page) -- zoomed out enough to show the St. Louis-to-
+# Greenville stretch of the river, not tight on any one spot. uirevision="keep-map" on
+# the figure means this only applies before the user pans/zooms themselves.
+DEFAULT_MAP_ZOOM = 4.8
+DEFAULT_MAP_CENTER = dict(lat=35.8, lon=-90.6)
 CATEGORY_ICONS = {"dredging": "🛠️", "shoaling": "🔺", "other": "⚠️"}
 DRAFT_ANNOUNCED_OPACITY = 0.45
 DRAFT_IN_PLACE_OPACITY = 0.85
@@ -194,6 +204,43 @@ RIVER_GAGES = {
 
 # low-water reference threshold per gage (same anchors as the survey depth legend)
 GAGE_THRESHOLDS = {"St. Louis": -3, "Memphis": -10, "Greenville": 7}
+
+# Date Memphis hit its lowest stage each year -- shown under each "20XX Low Water" River
+# Depth Scenarios option. Keep in sync with
+# update_bathym/make_combined_depth_polygons.py's LOW_WATER_YEARS (that's where the
+# actual scenario files get built; this is just the labels).
+LOW_WATER_YEAR_LABELS = {
+    2022: "October 20, 2022",
+    2023: "October 17, 2023",
+    2024: "November 3, 2024",
+    2025: "October 20, 2025",
+}
+
+
+def _ordinal(n):
+    """11/12/13 -> 'th' regardless of last digit (11th, not 11st); everything else keys
+    off the last digit (1st/2nd/3rd, else th)."""
+    suffix = "th" if 11 <= n % 100 <= 13 else {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
+    return f"{n}{suffix}"
+
+
+def _low_water_scenario_option(year):
+    """One depth-scenario-radio option for a "20XX Low Water" year -- bold year label,
+    the date it happened underneath in smaller/muted text (matches _cc_legend_row's
+    main-line/sub-line pattern used elsewhere in the legend). The year itself isn't
+    repeated in the date line since the line above it already states it."""
+    event_date = datetime.strptime(LOW_WATER_YEAR_LABELS[year], "%B %d, %Y")
+    month_day = f"{event_date.strftime('%B')} {_ordinal(event_date.day)}"
+    return {
+        "label": html.Div([
+            html.Span(f"{year} Low Water", style={"display": "block"}),
+            html.Span(
+                ["Occurred on ", html.B(month_day)],
+                style={"font-size": "11px", "color": "#888", "display": "block", "font-weight": "normal"},
+            ),
+        ]),
+        "value": f"{year}lowwater",
+    }
 
 
 _stage_csv = Path("river_stage_history.csv")
@@ -640,7 +687,7 @@ app.index_string = """
 # --------------------------------------------------
 
 # Style constants for the slide-out plots panel
-PLOTS_PANEL_WIDTH = "420px"
+PLOTS_PANEL_WIDTH = "400px"
 PLOTS_PANEL_CLOSED = {
     "position": "absolute", "top": "0", "right": "0", "height": "100%",
     "width": "0", "overflow": "hidden",
@@ -656,55 +703,44 @@ PLOTS_PANEL_OPEN = {
     "padding": "20px",
     "overflow-y": "auto",
 }
-
-# Style constants for the slide-out 2026 insights panel — same mechanism as
-# the plots panel above, just a second tab stacked on the same map edge
-INSIGHTS_PANEL_WIDTH = "380px"
-INSIGHTS_PANEL_CLOSED = {
-    "position": "absolute", "top": "0", "right": "0", "height": "100%",
-    "width": "0", "overflow": "hidden",
-    "background": "rgba(255,255,255,0.97)",
-    "box-shadow": "none",
-    "transition": "width 0.25s ease",
-    "zIndex": "16",
-}
-INSIGHTS_PANEL_OPEN = {
-    **INSIGHTS_PANEL_CLOSED,
-    "width": INSIGHTS_PANEL_WIDTH,
-    "box-shadow": "-2px 0 6px rgba(0,0,0,0.3)",
-    # extra right padding keeps text from running under the toggle tab, which
-    # floats on top of the panel at the same right edge while it's open
-    "padding": "24px 60px 24px 24px",
-    "overflow-y": "auto",
-}
-
-# Shared styling for the two right-edge tabs (insights + price plots)
-INSIGHTS_TOGGLE_LABEL = ["2026", html.Br(), "Insights", html.Br(), "Summary"]
+# Styling for the plots panel's right-edge toggle tab
 PLOTS_TOGGLE_LABEL = ["View", html.Br(), "Price", html.Br(), "Plots"]
 TAB_BASE_STYLE = {
     "background": "#1b3a5c", "color": "white", "border": "2px solid white",
     "border-radius": "6px 0 0 6px", "padding": "12px 8px", "cursor": "pointer",
     "font-size": "15px", "text-align": "center",
 }
-TAB_HIDDEN_STYLE = {**TAB_BASE_STYLE, "display": "none"}
 
-# Colors for each depth bin polygon overlay (deep → shallow)
+# Colors for each depth bin polygon overlay (deep → shallow). Bands match
+# update_bathym/make_combined_depth_polygons.py's DISPLAY_BINS (duplicated below as
+# _DISPLAY_BINS rather than imported -- app.py doesn't import the update_bathym
+# pipeline scripts, only reads the data files they produce).
 DEPTH_POLY_COLORS = {
-    ">20 ft":      "#084594",
-    "17.5-20 ft":  "#2171b5",
-    "15-17.5 ft":  "#4292c6",
-    "14-15 ft":    "#74c476",
-    "13-14 ft":    "#a1d99b",
-    "12-13 ft":    "#fee08b",
-    "11-12 ft":    "#fdae61",
-    "10-11 ft":    "#f46d43",
-    "9-10 ft":     "#d73027",
-    "8-9 ft":      "#a50026",
-    "7-8 ft":      "#7b0000",
-    "6-7 ft":      "#9e0142",
-    "5-6 ft":      "#6a0136",
-    "<5 ft":       "#3d0026",
+    "20+ ft":      "#084594",
+    "15-20 ft":    "#4292c6",
+    "12-15 ft":    "#74c476",
+    "9-12 ft":     "#fee08b",
+    "5-9 ft":      "#f46d43",
+    "<5 ft":       "#a50026",
 }
+_DISPLAY_BINS = [
+    (20,   None,  "20+ ft"),
+    (15,   20,    "15-20 ft"),
+    (12,   15,    "12-15 ft"),
+    (9,    12,    "9-12 ft"),
+    (5,    9,     "5-9 ft"),
+    (None, 5,     "<5 ft"),
+]
+
+
+def _assign_display_bin(depth):
+    for lo, hi, label in _DISPLAY_BINS:
+        if lo is not None and depth < lo:
+            continue
+        if hi is not None and depth >= hi:
+            continue
+        return label
+    return None
 
 
 def _geom_to_lonlat(geom):
@@ -718,6 +754,65 @@ def _geom_to_lonlat(geom):
         lons.append(None)
         lats.append(None)
     return lons, lats
+
+
+@functools.lru_cache(maxsize=32)
+def _load_depth_polygon_bins(poly_path_str):
+    """Parse a depth-polygon geojson into (bin_label, lons, lats) tuples, cached by path.
+    update_map() re-runs on every map interaction (year, layer toggles, clicking a
+    dredging/shoaling marker, etc.), not just when a depth-polygon layer's own inputs
+    change, so without caching this geopandas read + coordinate flatten -- the expensive
+    part, not trace construction -- would redo the same work on every unrelated click.
+    Coordinates are rounded to 6 decimal places (~11cm) since that's already far finer
+    than these ~40m-buffered polygons need, which keeps the per-request trace payload
+    smaller without any visible effect.
+
+    A raw single-survey file (see make_depth_polygons.py) stores an exact whole-foot
+    depth_bin at every point -- regroup + dissolve those into the same coarse
+    DEPTH_POLY_COLORS display bands the combined "River Depth" layer uses, so one
+    survey doesn't draw dozens of same-colored overlapping traces. A combined file (see
+    make_combined_depth_polygons.py) already stores display-band labels directly."""
+    poly_gdf = gpd.read_file(poly_path_str)
+    if pd.api.types.is_numeric_dtype(poly_gdf["depth_bin"]):
+        poly_gdf["depth_bin"] = poly_gdf["depth_bin"].apply(_assign_display_bin)
+        poly_gdf = poly_gdf.dissolve(by="depth_bin", as_index=False)
+        bin_order_map = {label: i for i, (_, _, label) in enumerate(_DISPLAY_BINS)}
+        poly_gdf["bin_order"] = poly_gdf["depth_bin"].map(bin_order_map)
+    poly_gdf = poly_gdf.sort_values("bin_order")
+    bins = []
+    for _, row in poly_gdf.iterrows():
+        lons, lats = _geom_to_lonlat(row.geometry)
+        lons = [round(v, 6) if v is not None else None for v in lons]
+        lats = [round(v, 6) if v is not None else None for v in lats]
+        bins.append((row["depth_bin"], lons, lats))
+    return bins
+
+
+def _add_depth_polygon_traces(fig, poly_path):
+    """Add one filled Scattermap trace per depth-bin polygon in a survey's depth-polygon
+    geojson (see make_depth_polygons.py). Shared by the single clicked-survey overlay and
+    the "River Depth" layer, which draws every survey's polygons at once instead of just
+    the selected one."""
+    for bin_label, lons, lats in _load_depth_polygon_bins(str(poly_path)):
+        color = DEPTH_POLY_COLORS.get(bin_label, "#888888")
+        fig.add_trace(go.Scattermap(
+            lon=lons,
+            lat=lats,
+            mode="lines",
+            fill="toself",
+            fillcolor=color,
+            # width is in screen pixels, not map distance -- these polygons are only
+            # ~40m wide (river-channel buffer), which shrinks to a sub-pixel sliver at
+            # the app's default zoomed-out view, so a real stroke width (unlike the old
+            # width=0) is what actually keeps the band visible until you zoom way in
+            line=dict(width=1.5, color=color),
+            opacity=0.75,
+            name=bin_label,
+            hoverinfo="text",
+            hovertext=f"<b>{bin_label}</b>",
+            hoverlabel=dict(bgcolor=color, bordercolor=color, font=dict(color="white")),
+            showlegend=False,
+        ))
 
 
 # AIS-derived dredge activity (2021-2024) -- distinct from the manually logged USACE
@@ -1121,15 +1216,44 @@ MONTH_WEEK_TICKVALS = _month_starts.isocalendar()["week"].tolist()
 MONTH_WEEK_TICKTEXT = _month_starts.strftime("%b").tolist()
 
 
+def _build_memphis_stage_fig(year, compare_year):
+    """Memphis river stage graph -- first plot in the price-plots panel."""
+    fig = go.Figure(data=_year_overlay_traces(
+        memphis_stage, "week_no", "stage", year, "#2166ac", "date", "%{y:.2f} ft",
+        compare_year=compare_year,
+    ))
+    fig.update_layout(
+        title=dict(
+            text="Memphis River Stage",
+            subtitle=dict(text="Source: NOAA National Weather Service", font=dict(size=10, color="#999")),
+        ),
+        xaxis=dict(tickvals=MONTH_WEEK_TICKVALS, ticktext=MONTH_WEEK_TICKTEXT),
+        yaxis_title="Stage (ft)",
+        yaxis=dict(range=[memphis_stage['stage'].min()-1, memphis_stage['stage'].max()+1], hoverformat=".2f"),
+        height=250,
+        legend=dict(
+           orientation="h",x=0.5,y=-0.32,xanchor="center",yanchor="top",traceorder="normal",
+           font=dict(size=8),
+           bgcolor="rgba(255,255,255,0.6)",bordercolor="black",borderwidth=1),
+        margin=dict(l=50, r=20, t=55, b=75),
+        hovermode="closest"
+    )
+    return fig
+
+
 def _year_overlay_traces(df, x_col, y_col, year, color, hover_date_col, value_hover_fmt,
-                          compare_year=None, compare_color="#000000", month_label_col=None):
+                          compare_year=None, compare_color="#000000", month_label_col=None,
+                          show_other_years_legend=True):
     """Background line per non-selected year in light grey, with the selected year's line
     highlighted in `color` on top, and an optional second `compare_year` highlighted in
     `compare_color` for side-by-side comparison. Years aren't aligned on calendar dates (a
     given week/day lands on a different date each year), so x_col is expected to be a
     year-agnostic axis like ISO week number, with hover_date_col supplying the real date
     for the tooltip. Pass `month_label_col` for forward-rate series where the hover should
-    also show which calendar month the quoted rate's contract is for."""
+    also show which calendar month the quoted rate's contract is for. `show_other_years_legend`
+    is set False for the stacked plots-panel charts on Current Conditions, where every plot
+    shares the same "Other years" style and repeating the legend entry on each one is redundant
+    -- only the top plot (Memphis River Stage) keeps it."""
     def _highlighted_trace(y, line_color, rank):
         df_y = df[df["year"] == y].sort_values(x_col)
         if month_label_col:
@@ -1156,7 +1280,7 @@ def _year_overlay_traces(df, x_col, y_col, year, color, hover_date_col, value_ho
         traces.append(go.Scatter(
             x=df_other[x_col], y=df_other[y_col],
             mode="lines", line=dict(width=1, color="#cccccc"),
-            name="Other years", legendgroup="other_years", showlegend=(i == 0),
+            name="Other years", legendgroup="other_years", showlegend=(i == 0 and show_other_years_legend),
             legendrank=3, hoverinfo="skip",
         ))
     if compare_year is not None and compare_year != year:
@@ -1301,6 +1425,317 @@ _soybean_futures_fig = build_futures_chart("soybean")
 _compare_years_fig = build_compare_years_fig(build_compare_years_data())
 _barge_rate_placeholder_fig = build_barge_rate_placeholder_fig()
 
+# Full 5-layer legend, shown on the "Riverbed Surveys" tab
+FULL_LAYER_OPTIONS = [
+    {
+        "label": html.Span([
+            html.Div([
+                html.Span("Riverbed Surveys", style={"font-size": "16px"}),
+                _layer_info_icon(
+                    "U.S. Army Corps of Engineers eHydro",
+                    [
+                        html.Span(
+                            "Hydrographic surveys (“riverbed surveys”) "
+                            "measure the elevation of the riverbed. We analyze "
+                            "each survey to estimate how shallow the channel "
+                            "could get at that location if the river dropped "
+                            "to a historic low-water stage.",
+                            style={"display": "block", "margin-bottom": "6px"},
+                        ),
+                        html.Span([
+                            html.Span("High risk: ", style={"font-weight": "bold"}),
+                            "a 9-ft-deep path may not exist across the channel, "
+                            "so barge traffic is likely to be disrupted under "
+                            "low water conditions.",
+                        ], style={"display": "block", "margin-bottom": "4px"}),
+                        html.Span([
+                            html.Span("Medium risk: ", style={"font-weight": "bold"}),
+                            "a 9-ft-deep path should exist, but it may be "
+                            "narrow or prone to shoaling.",
+                        ], style={"display": "block", "margin-bottom": "4px"}),
+                        html.Span([
+                            html.Span("Low risk: ", style={"font-weight": "bold"}),
+                            "no barge navigation issues expected, even under "
+                            "low water.",
+                        ], style={"display": "block"}),
+                    ],
+                    wide=True,
+                ),
+                html.Div(
+                    "Navigation Risk under Low Water:",
+                    style={"font-size": "13px", "display": "block", "width": "100%"}
+                ),
+                html.Div(
+                    style={"display": "flex", "gap": "10px", "margin-top": "5px", "margin-left": "4px"},
+                    children=[
+                        html.Div([
+                            html.Div(style={"width": "12px", "height": "12px", "border-radius": "50%", "background": RISK_BINS[0][1], "display": "inline-block", "margin-right": "4px", "vertical-align": "middle"}),
+                            html.Span("Low", style={"font-size": "13px", "vertical-align": "middle"}),
+                        ]),
+                        html.Div([
+                            html.Div(style={"width": "12px", "height": "12px", "border-radius": "50%", "background": RISK_BINS[1][1], "display": "inline-block", "margin-right": "4px", "vertical-align": "middle"}),
+                            html.Span("Medium", style={"font-size": "13px", "vertical-align": "middle"}),
+                        ]),
+                        html.Div([
+                            html.Img(src="/assets/at_risk_marker.png", height="16", style={"display": "inline-block", "margin-right": "4px", "vertical-align": "middle"}),
+                            html.Span("High", style={"font-size": "13px", "vertical-align": "middle"}),
+                        ]),
+                    ]
+                ),
+            ])
+        ]),
+        "value": "bathy",
+    },
+    {
+        "label": html.Span([
+            html.Img(src="/assets/raindrop.png", height="22", style={"vertical-align": "middle", "margin-right": "5px"}),
+            "Stream Gage",
+            _layer_info_icon(
+                "USGS / NOAA-NWS",
+                [
+                    html.Span(
+                        "Daily river stage (water level) readings at the "
+                        "St. Louis, Memphis, and Greenville gages.",
+                        style={"display": "block", "margin-bottom": "6px"},
+                    ),
+                    html.Span(
+                        "River stage measures the elevation of the river "
+                        "surface rather than the actual depth of the river.",
+                        style={"display": "block"},
+                    ),
+                ],
+                wide=True,
+            ),
+        ]),
+        "value": "stage",
+    },
+    {
+        "label": html.Span([
+            html.Img(src="/assets/dredge_marker.png", height="22", style={"vertical-align": "middle", "margin-right": "5px"}),
+            "Dredging",
+            _layer_info_icon(
+                [
+                    "U.S. Coast Guard Broadcast Notice to Mariners (2026)",
+                    "Marine Cadastre AIS Data (2021–2025)",
+                ],
+                [
+                    html.Span(
+                        "Dredging is performed by the U.S. Army Corps of "
+                        "Engineers to remove sediment from the riverbed and "
+                        "deepen the channel for navigation.",
+                        style={"display": "block", "margin-bottom": "6px"},
+                    ),
+                    html.Span(
+                        "Recent dredging reports come from USCG notices.",
+                        style={"display": "block", "margin-bottom": "6px"},
+                    ),
+                    html.Span(
+                        "Exact dredging locations are available through 2025, "
+                        "calculated from AIS vessel location data.",
+                        style={"display": "block"},
+                    ),
+                ],
+                wide=True,
+            ),
+        ]),
+        "value": "dredging",
+    },
+    {
+        "label": html.Span([
+            html.Img(src="/assets/shoaling_marker.png", height="22", style={"vertical-align": "middle", "margin-right": "5px"}),
+            "Shoaling",
+            _layer_info_icon(
+                "U.S. Coast Guard Broadcast Notice to Mariners",
+                "Reports of shoaling (sediment buildup on the riverbed) "
+                "indicate restricted channel depth and a higher risk of "
+                "barge grounding."
+            ),
+        ]),
+        "value": "shoaling",
+    },
+    {
+        "label": html.Span([
+            html.Div(style={
+                "display": "inline-block",
+                "width": "22px", "height": "4px",
+                "background": CATEGORY_COLORS["draft"],
+                "vertical-align": "middle",
+                "margin-right": "5px",
+                "border-radius": "2px",
+            }),
+            "Draft Restriction",
+            _layer_info_icon(
+                "U.S. Coast Guard Broadcast Notice to Mariners",
+                [
+                    html.Span(
+                        "The USCG imposes draft restrictions when water "
+                        "levels drop to critical lows.",
+                        style={"display": "block", "margin-bottom": "6px"},
+                    ),
+                    html.Span(
+                        "A barge's draft is how far it sits below the "
+                        "waterline. The deeper the draft, the greater the "
+                        "risk of grounding in shallow water.",
+                        style={"display": "block", "margin-bottom": "6px"},
+                    ),
+                    html.Span(
+                        "Operators reduce draft by loading less cargo.",
+                        style={"display": "block"},
+                    ),
+                ],
+                wide=True,
+            ),
+        ]),
+        "value": "draft",
+    },
+]
+FULL_LAYER_LABEL_STYLE = {"display": "flex", "align-items": "center", "margin-bottom": "5px", "font-size": "16px"}
+FULL_LAYER_INPUT_STYLE = {"margin-right": "6px"}
+
+
+def _cc_legend_row(icon, main_line, sub_line, tooltip_source, tooltip_description, tooltip_wide=True):
+    """One restricted-legend row for the Current Conditions page: an icon, a label (bold
+    main line, plus an optional smaller note line below when sub_line is truthy), and the
+    same '?' tooltip used on the full legend -- laid out so the checkbox (via
+    CC_LAYER_LABEL_STYLE's flex-start) lines up with the main line, not the vertical
+    center of the label block. The tooltip sits right after the main line itself (not
+    after the whole label block), so a long sub line -- e.g. shoaling's -- doesn't push
+    it far away from the text it's attached to."""
+    label_children = [
+        html.Div(
+            style={"display": "flex", "align-items": "center", "gap": "4px"},
+            children=[
+                html.Span(main_line, style={"font-size": "16px"}),
+                _layer_info_icon(tooltip_source, tooltip_description, wide=tooltip_wide),
+            ]
+        ),
+    ]
+    if sub_line:
+        label_children.append(
+            html.Span(sub_line, style={"font-size": "11px", "color": "#666", "display": "block", "font-weight": "normal"})
+        )
+    return html.Div(
+        style={"display": "flex", "align-items": "flex-start", "gap": "6px"},
+        children=[icon, html.Div(label_children)],
+    )
+
+
+# Restricted 3-layer legend, shown on the "Current Conditions" tab
+CC_LAYER_OPTIONS = [
+    {
+        "label": _cc_legend_row(
+            html.Img(src="/assets/dredge_marker.png", height="22", style={"margin-top": "1px"}),
+            "Recent Dredging", "(this season only)",
+            [
+                "U.S. Coast Guard Broadcast Notice to Mariners (2026)",
+                "Marine Cadastre AIS Data (2021–2025)",
+            ],
+            [
+                html.Span(
+                    "Dredging is performed by the U.S. Army Corps of "
+                    "Engineers to remove sediment from the riverbed and "
+                    "deepen the channel for navigation.",
+                    style={"display": "block", "margin-bottom": "6px"},
+                ),
+                html.Span(
+                    "Recent dredging reports come from USCG notices.",
+                    style={"display": "block", "margin-bottom": "6px"},
+                ),
+                html.Span(
+                    "Exact dredging locations are available through 2025, "
+                    "calculated from AIS vessel location data.",
+                    style={"display": "block"},
+                ),
+            ],
+        ),
+        "value": "dredging",
+    },
+    {
+        "label": _cc_legend_row(
+            html.Img(src="/assets/shoaling_marker.png", height="22", style={"margin-top": "1px"}),
+            "Shoaling Reports", "(sediment buildup that could impede barges)",
+            "U.S. Coast Guard Broadcast Notice to Mariners",
+            "Reports of shoaling (sediment buildup on the riverbed) "
+            "indicate restricted channel depth and a higher risk of "
+            "barge grounding.",
+        ),
+        "value": "shoaling",
+    },
+    {
+        "label": _cc_legend_row(
+            html.Div(style={
+                "display": "inline-block",
+                "width": "22px", "height": "4px", "margin-top": "9px",
+                "background": CATEGORY_COLORS["draft"],
+                "border-radius": "2px",
+            }),
+            "Draft Restrictions", "(current or upcoming)",
+            "U.S. Coast Guard Broadcast Notice to Mariners",
+            [
+                html.Span(
+                    "The USCG imposes draft restrictions when water "
+                    "levels drop to critical lows.",
+                    style={"display": "block", "margin-bottom": "6px"},
+                ),
+                html.Span(
+                    "A barge's draft is how far it sits below the "
+                    "waterline. The deeper the draft, the greater the "
+                    "risk of grounding in shallow water.",
+                    style={"display": "block", "margin-bottom": "6px"},
+                ),
+                html.Span(
+                    "Operators reduce draft by loading less cargo.",
+                    style={"display": "block"},
+                ),
+            ],
+        ),
+        "value": "draft",
+    },
+    {
+        "label": _cc_legend_row(
+            html.Div(style={
+                "display": "inline-block",
+                "width": "22px", "height": "14px", "margin-top": "1px",
+                "background": f"linear-gradient(to right, {', '.join(DEPTH_POLY_COLORS.values())})",
+                "border-radius": "2px",
+            }),
+            "River Depth",
+            ["(zoom in to see depth at locations", html.Br(), "surveyed this season)"],
+            "U.S. Army Corps of Engineers eHydro",
+            "Estimated riverbed depth at every confirmed survey "
+            "location, shaded from deep (blue) to shallow (red). "
+            "Shown for today's actual river stage by default -- use "
+            "the \"River Depth Scenarios\" box below the legend to "
+            "see it under a historic low-water stage instead.",
+        ),
+        "value": "river_depth",
+    },
+    {
+        "label": _cc_legend_row(
+            html.Img(src="/assets/raindrop.png", height="22", style={"margin-top": "1px"}),
+            "Stream Gage", None,
+            "USGS / NOAA-NWS",
+            [
+                html.Span(
+                    "Daily river stage (water level) readings at the "
+                    "St. Louis, Memphis, and Greenville gages.",
+                    style={"display": "block", "margin-bottom": "6px"},
+                ),
+                html.Span(
+                    "River stage measures the elevation of the river "
+                    "surface rather than the actual depth of the river.",
+                    style={"display": "block"},
+                ),
+            ],
+        ),
+        "value": "stage",
+    },
+]
+CC_LAYER_VALUE = ["dredging", "shoaling", "draft", "stage", "river_depth"]
+CC_LAYER_LABEL_STYLE = {"display": "flex", "align-items": "flex-start", "margin-bottom": "3px", "font-size": "16px"}
+CC_LAYER_INPUT_STYLE = {"margin-right": "6px", "margin-top": "3px"}
+
+
 app.layout = html.Div(
     style={"width": "100%", "margin": "0", "padding": "0"},
     children=[
@@ -1322,7 +1757,7 @@ app.layout = html.Div(
                         "margin": "0 0 0 30px", "color": "white",
                         "font-family": "'DM Sans', sans-serif",
                         "font-weight": "700",
-                        "font-size": "30px", "letter-spacing": "1.5px",
+                        "font-size": "24px", "letter-spacing": "1px",
                     }
                 ),
                 html.Div(
@@ -1330,7 +1765,8 @@ app.layout = html.Div(
                     style={"display": "flex", "align-items": "center"},
                     children=[
                         html.Button("About", id="nav-about", n_clicks=0, style=NAV_LINK_INACTIVE),
-                        html.Button("Mississippi River Conditions", id="nav-river-conditions", n_clicks=0, style=NAV_LINK_ACTIVE),
+                        html.Button("Current Conditions", id="nav-current-conditions", n_clicks=0, style=NAV_LINK_ACTIVE),
+                        html.Button("Historic Conditions", id="nav-river-conditions", n_clicks=0, style=NAV_LINK_INACTIVE),
                         html.Button("Barge Demand", id="nav-barge-demand", n_clicks=0, style=NAV_LINK_INACTIVE),
                     ]
                 ),
@@ -1343,6 +1779,10 @@ app.layout = html.Div(
         dcc.Store(id="selected-gage-store", data=None),
         dcc.Store(id="gage-freq-store", data=None),
         dcc.Store(id="selected-shoaling-mile-store", data=None),
+        # True on the new "Current Conditions" landing page, False on "Riverbed Surveys" --
+        # both nav tabs share the same map/controls DOM, this just switches which subset
+        # of the map controls/legend/plots panel is shown
+        dcc.Store(id="cc-mode-store", data=True),
 
         ##################################
         # Map fills the full width; controls and plots panel float on top of it
@@ -1546,9 +1986,9 @@ app.layout = html.Div(
                     ]
                 ),
 
-                # Controls overlay, floating on top of the map
+                # Controls overlay, floating on top of the map (year dropdown + legend).
                 html.Div(
-                    id="map-controls",
+                    id="map-controls-stack",
                     style={
                         "position": "absolute",
                         "top": "15px",
@@ -1556,215 +1996,143 @@ app.layout = html.Div(
                         "zIndex": "10",
                         "display": "flex",
                         "flex-direction": "column",
+                        "align-items": "flex-start",
                         "gap": "10px",
-                        "background": "rgba(255,255,255,0.9)",
-                        "padding": "10px 15px",
-                        "border-radius": "8px",
-                        "box-shadow": "0 1px 4px rgba(0,0,0,0.3)"
                     },
                     children=[
-                        # Year dropdown
                         html.Div(
-                            id="year-select-wrapper",
-                            style={"width": "220px"},
+                            id="map-controls",
+                            style={
+                                "display": "flex",
+                                "flex-direction": "column",
+                                "gap": "10px",
+                                "background": "rgba(255,255,255,0.9)",
+                                "padding": "10px 15px",
+                                "border-radius": "8px",
+                                "box-shadow": "0 1px 4px rgba(0,0,0,0.3)",
+                                "font-family": "'DM Sans', sans-serif",
+                            },
                             children=[
-                                html.Label("Select Year"),
-                                dcc.Dropdown(
-                                    id="year-slider",
-                                    options=[{"label": str(y), "value": y} for y in years],
-                                    value=thisyear if thisyear in years else years[-1],
-                                    clearable=False,
-                                    style={"height": "40px", "font-size": "15px"}
-                                )
+                                # Year dropdown -- hidden on the Current Conditions tab, where
+                                # the map is always locked to the current year (see
+                                # sync_cc_mode_controls)
+                                html.Div(
+                                    id="year-select-wrapper",
+                                    style={"width": "220px", "display": "none"},
+                                    children=[
+                                        html.Label("Select Year"),
+                                        dcc.Dropdown(
+                                            id="year-slider",
+                                            options=[{"label": str(y), "value": y} for y in years],
+                                            value=DEFAULT_HISTORIC_YEAR,
+                                            clearable=False,
+                                            style={"height": "40px", "font-size": "15px"}
+                                        )
+                                    ]
+                                ),
+
+                                # Layers checkboxes (the map legend). Current Conditions and
+                                # Riverbed Surveys each get their own static Checklist (rather
+                                # than one Checklist whose options/value are swapped by
+                                # sync_cc_mode_controls) -- swapping a rich-label Checklist's
+                                # options between two very differently-shaped option trees
+                                # (3 simple rows vs. 5 rows, one with a nested risk-tier
+                                # breakdown) crashes dash-renderer's diffing mid-update, which
+                                # left the checklist frozen on its old options (Riverbed
+                                # Surveys never appeared, though the value still silently
+                                # reached the map callback). Two static components toggled by
+                                # display sidesteps that entirely.
+                                html.Div(
+                                    id="layer-toggle-wrapper",
+                                    style={"width": "240px"},
+                                    children=[
+                                        html.Label("Layers", style={"font-weight": "bold", "margin-bottom": "6px", "display": "block"}),
+                                        dcc.Checklist(
+                                            id="layer-toggle-cc",
+                                            options=CC_LAYER_OPTIONS,
+                                            value=CC_LAYER_VALUE,
+                                            inputStyle=CC_LAYER_INPUT_STYLE,
+                                            labelStyle=CC_LAYER_LABEL_STYLE,
+                                        ),
+                                        dcc.Checklist(
+                                            id="layer-toggle-full",
+                                            options=FULL_LAYER_OPTIONS,
+                                            value=["bathy", "stage"],
+                                            inputStyle=FULL_LAYER_INPUT_STYLE,
+                                            labelStyle=FULL_LAYER_LABEL_STYLE,
+                                            style={"display": "none"},
+                                        ),
+                                    ]
+                                ),
                             ]
                         ),
 
-                        # Layers checkboxes
+                        # River depth scenario toggle -- CC-only and only when the River
+                        # Depth layer itself is checked (see sync_depth_scenario_visibility),
+                        # same card style + width as map-controls above so it reads as a
+                        # second box stacked directly beneath the legend.
                         html.Div(
-                            id="layer-toggle-wrapper",
-                            style={"width": "240px"},
+                            id="depth-scenario-wrapper",
+                            style={"width": "240px", "display": "none"},
                             children=[
-                                html.Label("Layers", style={"font-weight": "bold", "margin-bottom": "6px", "display": "block"}),
-                                dcc.Checklist(
-                                    id="layer-toggle",
-                                    options=[
-                                        {
-                                            "label": html.Span([
-                                                html.Div([
-                                                    html.Span("Riverbed Surveys", style={"font-size": "16px"}),
-                                                    _layer_info_icon(
-                                                        "U.S. Army Corps of Engineers eHydro",
-                                                        [
-                                                            html.Span(
-                                                                "Hydrographic surveys (“riverbed surveys”) "
-                                                                "measure the elevation of the riverbed. We analyze "
-                                                                "each survey to estimate how shallow the channel "
-                                                                "could get at that location if the river dropped "
-                                                                "to a historic low-water stage.",
-                                                                style={"display": "block", "margin-bottom": "6px"},
-                                                            ),
-                                                            html.Span([
-                                                                html.Span("High risk: ", style={"font-weight": "bold"}),
-                                                                "a 9-ft-deep path may not exist across the channel, "
-                                                                "so barge traffic is likely to be disrupted under "
-                                                                "low water conditions.",
-                                                            ], style={"display": "block", "margin-bottom": "4px"}),
-                                                            html.Span([
-                                                                html.Span("Medium risk: ", style={"font-weight": "bold"}),
-                                                                "a 9-ft-deep path should exist, but it may be "
-                                                                "narrow or prone to shoaling.",
-                                                            ], style={"display": "block", "margin-bottom": "4px"}),
-                                                            html.Span([
-                                                                html.Span("Low risk: ", style={"font-weight": "bold"}),
-                                                                "no barge navigation issues expected, even under "
-                                                                "low water.",
-                                                            ], style={"display": "block"}),
-                                                        ],
-                                                        wide=True,
-                                                    ),
-                                                    html.Div(
-                                                        "Navigation Risk under Low Water:",
-                                                        style={"font-size": "13px", "display": "block", "width": "100%"}
-                                                    ),
-                                                    html.Div(
-                                                        style={"display": "flex", "gap": "10px", "margin-top": "5px", "margin-left": "4px"},
-                                                        children=[
-                                                            html.Div([
-                                                                html.Div(style={"width": "12px", "height": "12px", "border-radius": "50%", "background": RISK_BINS[0][1], "display": "inline-block", "margin-right": "4px", "vertical-align": "middle"}),
-                                                                html.Span("Low", style={"font-size": "13px", "vertical-align": "middle"}),
-                                                            ]),
-                                                            html.Div([
-                                                                html.Div(style={"width": "12px", "height": "12px", "border-radius": "50%", "background": RISK_BINS[1][1], "display": "inline-block", "margin-right": "4px", "vertical-align": "middle"}),
-                                                                html.Span("Medium", style={"font-size": "13px", "vertical-align": "middle"}),
-                                                            ]),
-                                                            html.Div([
-                                                                html.Img(src="/assets/at_risk_marker.png", height="16", style={"display": "inline-block", "margin-right": "4px", "vertical-align": "middle"}),
-                                                                html.Span("High", style={"font-size": "13px", "vertical-align": "middle"}),
-                                                            ]),
-                                                        ]
-                                                    ),
-                                                ])
-                                            ]),
-                                            "value": "bathy",
-                                        },
-                                        {
-                                            "label": html.Span([
-                                                html.Img(src="/assets/raindrop.png", height="22", style={"vertical-align": "middle", "margin-right": "5px"}),
-                                                "Stream Gage",
-                                                _layer_info_icon(
-                                                    "USGS / NOAA-NWS",
-                                                    [
-                                                        html.Span(
-                                                            "Daily river stage (water level) readings at the "
-                                                            "St. Louis, Memphis, and Greenville gages.",
-                                                            style={"display": "block", "margin-bottom": "6px"},
-                                                        ),
-                                                        html.Span(
-                                                            "River stage measures the elevation of the river "
-                                                            "surface rather than the actual depth of the river.",
-                                                            style={"display": "block"},
-                                                        ),
-                                                    ],
-                                                    wide=True,
+                                html.Div(
+                                    style={
+                                        "background": "rgba(255,255,255,0.9)",
+                                        "padding": "10px 15px",
+                                        "border-radius": "8px",
+                                        "box-shadow": "0 1px 4px rgba(0,0,0,0.3)",
+                                        "font-family": "'DM Sans', sans-serif",
+                                    },
+                                    children=[
+                                        html.Button(
+                                            id="depth-scenario-header",
+                                            n_clicks=0,
+                                            style={
+                                                "display": "flex", "align-items": "center",
+                                                "justify-content": "space-between", "width": "100%",
+                                                "background": "none", "border": "none", "padding": "0",
+                                                "cursor": "pointer", "font-family": "inherit",
+                                            },
+                                            children=[
+                                                html.Label(
+                                                    "River Depth Scenarios",
+                                                    style={"font-weight": "bold", "font-size": "16px", "margin": "0"},
                                                 ),
-                                            ]),
-                                            "value": "stage",
-                                        },
-                                        {
-                                            "label": html.Span([
-                                                html.Img(src="/assets/dredge_marker.png", height="22", style={"vertical-align": "middle", "margin-right": "5px"}),
-                                                "Dredging",
-                                                _layer_info_icon(
-                                                    [
-                                                        "U.S. Coast Guard Broadcast Notice to Mariners (2026)",
-                                                        "Marine Cadastre AIS Data (2021–2025)",
-                                                    ],
-                                                    [
-                                                        html.Span(
-                                                            "Dredging is performed by the U.S. Army Corps of "
-                                                            "Engineers to remove sediment from the riverbed and "
-                                                            "deepen the channel for navigation.",
-                                                            style={"display": "block", "margin-bottom": "6px"},
-                                                        ),
-                                                        html.Span(
-                                                            "Recent dredging reports come from USCG notices.",
-                                                            style={"display": "block", "margin-bottom": "6px"},
-                                                        ),
-                                                        html.Span(
-                                                            "Exact dredging locations are available through 2025, "
-                                                            "calculated from AIS vessel location data.",
-                                                            style={"display": "block"},
-                                                        ),
-                                                    ],
-                                                    wide=True,
+                                                html.Span("▼", id="depth-scenario-arrow", style={"font-size": "12px", "color": "#555"}),
+                                            ],
+                                        ),
+                                        html.Div(
+                                            id="depth-scenario-content",
+                                            style={"display": "none"},
+                                            children=[
+                                                html.P(
+                                                    "Check out river depths under different water "
+                                                    "level conditions",
+                                                    style={"font-size": "13px", "color": "#666", "margin": "8px 0 8px 0"},
                                                 ),
-                                            ]),
-                                            "value": "dredging",
-                                        },
-                                        {
-                                            "label": html.Span([
-                                                html.Img(src="/assets/shoaling_marker.png", height="22", style={"vertical-align": "middle", "margin-right": "5px"}),
-                                                "Shoaling",
-                                                _layer_info_icon(
-                                                    "U.S. Coast Guard Broadcast Notice to Mariners",
-                                                    "Reports of shoaling (sediment buildup on the riverbed) "
-                                                    "indicate restricted channel depth and a higher risk of "
-                                                    "barge grounding."
-                                                ),
-                                            ]),
-                                            "value": "shoaling",
-                                        },
-                                        {
-                                            "label": html.Span([
-                                                html.Div(style={
-                                                    "display": "inline-block",
-                                                    "width": "22px", "height": "4px",
-                                                    "background": CATEGORY_COLORS["draft"],
-                                                    "vertical-align": "middle",
-                                                    "margin-right": "5px",
-                                                    "border-radius": "2px",
-                                                }),
-                                                "Draft Restriction",
-                                                _layer_info_icon(
-                                                    "U.S. Coast Guard Broadcast Notice to Mariners",
-                                                    [
-                                                        html.Span(
-                                                            "The USCG imposes draft restrictions when water "
-                                                            "levels drop to critical lows.",
-                                                            style={"display": "block", "margin-bottom": "6px"},
-                                                        ),
-                                                        html.Span(
-                                                            "A barge's draft is how far it sits below the "
-                                                            "waterline. The deeper the draft, the greater the "
-                                                            "risk of grounding in shallow water.",
-                                                            style={"display": "block", "margin-bottom": "6px"},
-                                                        ),
-                                                        html.Span(
-                                                            "Operators reduce draft by loading less cargo.",
-                                                            style={"display": "block"},
-                                                        ),
+                                                dcc.RadioItems(
+                                                    id="depth-scenario-radio",
+                                                    options=[
+                                                        {"label": "Current Conditions", "value": "current"},
+                                                    ] + [
+                                                        _low_water_scenario_option(y) for y in sorted(LOW_WATER_YEAR_LABELS, reverse=True)
                                                     ],
-                                                    wide=True,
+                                                    value="current",
+                                                    inputStyle={"margin-right": "6px"},
+                                                    labelStyle={"display": "flex", "align-items": "flex-start", "margin-bottom": "4px", "font-size": "13px"},
                                                 ),
-                                            ]),
-                                            "value": "draft",
-                                        },
+                                            ],
+                                        ),
                                     ],
-                                    value=["bathy", "stage"],
-                                    inputStyle={"margin-right": "6px"},
-                                    labelStyle={"display": "flex", "align-items": "center", "margin-bottom": "5px", "font-size": "16px"},
-                                )
-                            ]
-                        )
+                                ),
+                            ],
+                        ),
                     ]
                 ),
 
 
 
-                # Tabs to open/close the insights and plots panels, stacked on
-                # the right edge of the map. The pair is centered together as
-                # one group (translateY(-50%) on the wrapper, not each tab) so
-                # adding the insights tab above didn't require re-centering math.
+                # Tab to open/close the plots panel, on the right edge of the map.
                 html.Div(
                     id="right-tabs-stack",
                     style={
@@ -1774,12 +2142,6 @@ app.layout = html.Div(
                     },
                     children=[
                         html.Button(
-                            INSIGHTS_TOGGLE_LABEL,
-                            id="insights-toggle",
-                            n_clicks=0,
-                            style=TAB_BASE_STYLE,
-                        ),
-                        html.Button(
                             PLOTS_TOGGLE_LABEL,
                             id="plots-toggle",
                             n_clicks=0,
@@ -1788,34 +2150,12 @@ app.layout = html.Div(
                     ]
                 ),
 
-                # Insights panel, slides in over the map
-                html.Div(
-                    id="insights-panel",
-                    style=INSIGHTS_PANEL_CLOSED,
-                    children=[
-                        html.H4("2026 Insights Summary", style=SECTION_HEADER_STYLE),
-                        html.P(
-                            "River stage is trending downward and running below this week's "
-                            "average, but survey data shows the Army Corps has kept the channel "
-                            "well maintained heading into fall. A few spots are worth watching: "
-                            "just south of St. Louis, plus smaller trouble spots near Rosedale and "
-                            "Lake Providence. Overall, the river is well prepared for low water.",
-                            style=SECTION_SUBTEXT_STYLE,
-                        ),
-                        html.P(
-                            "Barge rates are already running higher than typical for this time of "
-                            "year, with forward barge contracts at their highest ever rate for this "
-                            "time of year, and grain barge demand is expected to remain moderate to "
-                            "high through harvest.",
-                            style=SECTION_SUBTEXT_STYLE,
-                        ),
-                    ]
-                ),
-
-                # Plots panel, slides in over the map
+                # Plots panel, slides in over the map. Opens automatically on the Current
+                # Conditions tab (see toggle_right_panels) but can still be closed/reopened
+                # via plots-toggle there, same as on Riverbed Surveys where it starts closed.
                 html.Div(
                     id="plots-panel",
-                    style=PLOTS_PANEL_CLOSED,
+                    style=PLOTS_PANEL_OPEN,
                     children=[
                         html.Div(
                             style={
@@ -1824,9 +2164,10 @@ app.layout = html.Div(
                             },
                             children=[
                                 html.Label(
-                                    "Compare to another year?",
+                                    f"Compare {thisyear} to another year:",
+                                    id="compare-year-label",
                                     style={
-                                        "font-weight": "bold", "font-size": "13px", "color": "#1b3a5c",
+                                        "font-weight": "normal", "font-size": "14px", "color": "#1b3a5c",
                                         "font-family": "'DM Sans', sans-serif", "white-space": "nowrap",
                                     }
                                 ),
@@ -1834,19 +2175,19 @@ app.layout = html.Div(
                                     id="compare-year-dropdown",
                                     options=[],
                                     value=None,
-                                    placeholder="Select a year",
+                                    placeholder="Select Year",
                                     clearable=True,
                                     style={"font-size": "13px", "width": "110px"},
                                 ),
                             ]
                         ),
-                        dcc.Graph(id="barge-rate-plot", style={"height": "300px"}, config={"displayModeBar": False}),
-                        dcc.Graph(id="barge-rate-nextmonth-plot", style={"height": "300px"}, config={"displayModeBar": False}),
-                        dcc.Graph(id="barge-rate-threemonth-plot", style={"height": "300px"}, config={"displayModeBar": False}),
-                        dcc.Graph(id="corn-spread-plot", style={"height": "300px"}, config={"displayModeBar": False}),
-                        dcc.Graph(id="cornprice-plot", style={"height": "300px"}, config={"displayModeBar": False}),
-                        dcc.Graph(id="soyprice-plot", style={"height": "300px"}, config={"displayModeBar": False}),
-                        dcc.Graph(id="memphis-stage-plot", style={"height": "300px"}, config={"displayModeBar": False})
+                        dcc.Graph(id="memphis-stage-plot", style={"height": "250px"}, config={"displayModeBar": False}),
+                        dcc.Graph(id="barge-rate-plot", style={"height": "250px"}, config={"displayModeBar": False}),
+                        dcc.Graph(id="barge-rate-nextmonth-plot", style={"height": "250px"}, config={"displayModeBar": False}),
+                        dcc.Graph(id="barge-rate-threemonth-plot", style={"height": "250px"}, config={"displayModeBar": False}),
+                        dcc.Graph(id="corn-spread-plot", style={"height": "250px"}, config={"displayModeBar": False}),
+                        dcc.Graph(id="cornprice-plot", style={"height": "250px"}, config={"displayModeBar": False}),
+                        dcc.Graph(id="soyprice-plot", style={"height": "250px"}, config={"displayModeBar": False}),
                         # Additional plots can be added as more children
                     ]
                 )
@@ -2104,51 +2445,36 @@ def close_welcome(n_clicks):
 
 
 # --------------------------------------------------
-# PLOTS / INSIGHTS PANEL TOGGLES
+# PLOTS PANEL TOGGLE
 # --------------------------------------------------
-# The two tabs share one right-edge stack, and only one panel makes sense
-# open at a time -- clicking one opens its panel, hides the other tab (so
-# there's nothing floating over the open panel's text), and shows just a
-# close option. Closing brings both tabs back. A single callback keyed off
-# which tab fired (dash.ctx.triggered_id) keeps that shared state consistent,
-# since two independent callbacks can't both write to the sibling tab's style.
 
 @app.callback(
     Output("plots-panel", "style"),
-    Output("insights-panel", "style"),
     Output("plots-toggle", "style"),
-    Output("insights-toggle", "style"),
     Output("plots-toggle", "children"),
-    Output("insights-toggle", "children"),
     Output("active-panel-store", "data"),
     Input("plots-toggle", "n_clicks"),
-    Input("insights-toggle", "n_clicks"),
+    Input("cc-mode-store", "data"),
     State("active-panel-store", "data"),
-    prevent_initial_call=True
 )
-def toggle_right_panels(plots_clicks, insights_clicks, active_panel):
-    clicked = dash.ctx.triggered_id
-    new_active = None if active_panel == clicked else clicked
+def toggle_right_panels(plots_clicks, cc_mode, active_panel):
+    triggered = dash.ctx.triggered_id
 
-    plots_panel_style = PLOTS_PANEL_OPEN if new_active == "plots-toggle" else PLOTS_PANEL_CLOSED
-    insights_panel_style = INSIGHTS_PANEL_OPEN if new_active == "insights-toggle" else INSIGHTS_PANEL_CLOSED
-
-    if new_active is None:
-        plots_tab_style, insights_tab_style = TAB_BASE_STYLE, TAB_BASE_STYLE
-        plots_label, insights_label = PLOTS_TOGGLE_LABEL, INSIGHTS_TOGGLE_LABEL
-    elif new_active == "plots-toggle":
-        plots_tab_style, insights_tab_style = TAB_BASE_STYLE, TAB_HIDDEN_STYLE
-        plots_label, insights_label = "✕ Close", INSIGHTS_TOGGLE_LABEL
+    if cc_mode:
+        # Current Conditions: the plots panel opens automatically every time this page
+        # is (re)entered -- any trigger other than an explicit plots-toggle click (a
+        # fresh "cc-mode-store" switch, or initial load, where triggered_id is None)
+        # forces it back open rather than resuming a closed state from a previous visit.
+        is_open = not (triggered == "plots-toggle" and active_panel == "plots-toggle")
     else:
-        plots_tab_style, insights_tab_style = TAB_HIDDEN_STYLE, TAB_BASE_STYLE
-        plots_label, insights_label = PLOTS_TOGGLE_LABEL, "✕ Close"
+        # Historic Conditions: starts closed, toggled purely by clicks. Switching into
+        # this tab (triggered_id is "cc-mode-store", not a tab click) resets it closed
+        # rather than resuming whatever was open on a previous visit.
+        is_open = triggered == "plots-toggle" and active_panel != "plots-toggle"
 
-    return (
-        plots_panel_style, insights_panel_style,
-        plots_tab_style, insights_tab_style,
-        plots_label, insights_label,
-        new_active,
-    )
+    if is_open:
+        return PLOTS_PANEL_OPEN, TAB_BASE_STYLE, "✕", "plots-toggle"
+    return PLOTS_PANEL_CLOSED, TAB_BASE_STYLE, PLOTS_TOGGLE_LABEL, None
 
 
 # --------------------------------------------------
@@ -2159,20 +2485,83 @@ def toggle_right_panels(plots_clicks, insights_clicks, active_panel):
     Output("river-page", "style"),
     Output("demand-page", "style"),
     Output("about-page", "style"),
+    Output("nav-current-conditions", "style"),
     Output("nav-river-conditions", "style"),
     Output("nav-barge-demand", "style"),
     Output("nav-about", "style"),
+    Output("cc-mode-store", "data"),
+    Input("nav-current-conditions", "n_clicks"),
     Input("nav-river-conditions", "n_clicks"),
     Input("nav-barge-demand", "n_clicks"),
     Input("nav-about", "n_clicks"),
     prevent_initial_call=True
 )
-def toggle_top_level_page(river_clicks, demand_clicks, about_clicks):
-    if dash.ctx.triggered_id == "nav-barge-demand":
-        return RIVER_PAGE_HIDDEN, DEMAND_PAGE_VISIBLE, ABOUT_PAGE_HIDDEN, NAV_LINK_INACTIVE, NAV_LINK_ACTIVE, NAV_LINK_INACTIVE
-    if dash.ctx.triggered_id == "nav-about":
-        return RIVER_PAGE_HIDDEN, DEMAND_PAGE_HIDDEN, ABOUT_PAGE_VISIBLE, NAV_LINK_INACTIVE, NAV_LINK_INACTIVE, NAV_LINK_ACTIVE
-    return RIVER_PAGE_VISIBLE, DEMAND_PAGE_HIDDEN, ABOUT_PAGE_HIDDEN, NAV_LINK_ACTIVE, NAV_LINK_INACTIVE, NAV_LINK_INACTIVE
+def toggle_top_level_page(cc_clicks, river_clicks, demand_clicks, about_clicks):
+    triggered = dash.ctx.triggered_id
+    if triggered == "nav-barge-demand":
+        return (RIVER_PAGE_HIDDEN, DEMAND_PAGE_VISIBLE, ABOUT_PAGE_HIDDEN,
+                NAV_LINK_INACTIVE, NAV_LINK_INACTIVE, NAV_LINK_ACTIVE, NAV_LINK_INACTIVE, dash.no_update)
+    if triggered == "nav-about":
+        return (RIVER_PAGE_HIDDEN, DEMAND_PAGE_HIDDEN, ABOUT_PAGE_VISIBLE,
+                NAV_LINK_INACTIVE, NAV_LINK_INACTIVE, NAV_LINK_INACTIVE, NAV_LINK_ACTIVE, dash.no_update)
+    if triggered == "nav-river-conditions":
+        return (RIVER_PAGE_VISIBLE, DEMAND_PAGE_HIDDEN, ABOUT_PAGE_HIDDEN,
+                NAV_LINK_INACTIVE, NAV_LINK_ACTIVE, NAV_LINK_INACTIVE, NAV_LINK_INACTIVE, False)
+    # nav-current-conditions (also the default landing page, though this branch won't
+    # run on load since prevent_initial_call=True -- see the static layout defaults)
+    return (RIVER_PAGE_VISIBLE, DEMAND_PAGE_HIDDEN, ABOUT_PAGE_HIDDEN,
+            NAV_LINK_ACTIVE, NAV_LINK_INACTIVE, NAV_LINK_INACTIVE, NAV_LINK_INACTIVE, True)
+
+
+# The map itself (id="map") is shared by both the Current Conditions and Riverbed
+# Surveys tabs; this callback swaps the surrounding controls between the two tabs'
+# versions whenever cc-mode-store changes (including on page load, since Current
+# Conditions is the default landing page).
+@app.callback(
+    Output("layer-toggle-cc", "style"),
+    Output("layer-toggle-full", "style"),
+    Output("year-select-wrapper", "style"),
+    Output("year-slider", "value"),
+    Input("cc-mode-store", "data"),
+)
+def sync_cc_mode_controls(cc_mode):
+    if cc_mode:
+        return (
+            {"display": "block"},
+            {"display": "none"},
+            {"width": "220px", "display": "none"},
+            thisyear,
+        )
+    return (
+        {"display": "none"},
+        {"display": "block"},
+        {"width": "220px", "display": "block"},
+        DEFAULT_HISTORIC_YEAR,
+    )
+
+
+# River Depth Scenarios box only makes sense once the River Depth layer is actually on
+# the map -- CC-only too, since river_depth isn't an option in FULL_LAYER_OPTIONS.
+@app.callback(
+    Output("depth-scenario-wrapper", "style"),
+    Input("cc-mode-store", "data"),
+    Input("layer-toggle-cc", "value"),
+)
+def sync_depth_scenario_visibility(cc_mode, layers_cc):
+    show = bool(cc_mode) and "river_depth" in (layers_cc or [])
+    return {"width": "240px", "display": "block" if show else "none"}
+
+
+@app.callback(
+    Output("depth-scenario-content", "style"),
+    Output("depth-scenario-arrow", "children"),
+    Input("depth-scenario-header", "n_clicks"),
+    prevent_initial_call=True,
+)
+def toggle_depth_scenario_box(n_clicks):
+    is_open = n_clicks % 2 == 1
+    content_style = {"display": "block"} if is_open else {"display": "none"}
+    return content_style, ("▲" if is_open else "▼")
 
 
 @app.callback(
@@ -2212,11 +2601,15 @@ def update_compare_years_barge_rate(click_data):
 @app.callback(
     Output("map", "figure"),
     Input("year-slider", "value"),
-    Input("layer-toggle", "value"),
+    Input("layer-toggle-cc", "value"),
+    Input("layer-toggle-full", "value"),
     Input("selected-survey-store", "data"),
     Input("selected-shoaling-mile-store", "data"),
+    Input("cc-mode-store", "data"),
+    Input("depth-scenario-radio", "value"),
 )
-def update_map(year, layers, selected_survey, selected_shoaling_mile):
+def update_map(year, layers_cc, layers_full, selected_survey, selected_shoaling_mile, cc_mode, depth_scenario):
+    layers = layers_cc if cc_mode else layers_full
 
     fig = go.Figure()
     df_b = bathy[bathy['year']==year]
@@ -2621,30 +3014,27 @@ def update_map(year, layers, selected_survey, selected_shoaling_mile):
                 showlegend=False,
             ))
 
+    # river depth layer -- draws one precomputed polygon per depth bin for the whole
+    # year, combining every confirmed survey (see
+    # update_bathym/make_combined_depth_polygons.py: newer surveys' polygons win over
+    # older ones wherever they overlap). Not built live -- the daily pipeline
+    # regenerates every scenario file every morning (and after a survey is
+    # confirmed/reviewed). "current" (default) is shifted to today's actual river stage;
+    # "20XXlowwater" is shifted to the stage each gage read on that year's lowest Memphis
+    # reading (LOW_WATER_YEARS) -- all only ever produced for the current year's surveys,
+    # see the depth-scenario-radio control.
+    if "river_depth" in layers:
+        suffix = "" if depth_scenario == "current" else f"_{depth_scenario}"
+        combined_path = _DEPTH_POLY_DIR / f"{year}_combined_depth_polygons{suffix}.geojson"
+        if combined_path.exists():
+            _add_depth_polygon_traces(fig, combined_path)
+
     # depth polygon overlay for clicked survey
     if selected_survey:
         sid = selected_survey.get("survey_id", "")
         poly_path = _DEPTH_POLY_DIR / f"{sid}_depth_polygons.geojson"
         if poly_path.exists():
-            poly_gdf = gpd.read_file(poly_path).sort_values("bin_order")
-            for _, row in poly_gdf.iterrows():
-                bin_label = row["depth_bin"]
-                color = DEPTH_POLY_COLORS.get(bin_label, "#888888")
-                lons, lats = _geom_to_lonlat(row.geometry)
-                fig.add_trace(go.Scattermap(
-                    lon=lons,
-                    lat=lats,
-                    mode="lines",
-                    fill="toself",
-                    fillcolor=color,
-                    line=dict(width=0),
-                    opacity=0.75,
-                    name=bin_label,
-                    hoverinfo="text",
-                    hovertext=f"<b>{bin_label}</b>",
-                    hoverlabel=dict(bgcolor=color, bordercolor=color, font=dict(color="white")),
-                    showlegend=False,
-                ))
+            _add_depth_polygon_traces(fig, poly_path)
 
     # AIS-derived dredge activity, shown alongside the manually logged dredging notices
     # above when the "Dredging" layer is on. Only covers 2021-2024 -- other years show
@@ -2690,8 +3080,8 @@ def update_map(year, layers, selected_survey, selected_shoaling_mile):
     fig.update_layout(
         map=dict(
             style="carto-darkmatter",
-            zoom=8.5,
-            center=dict(lat=32.5, lon=-91.1),
+            zoom=DEFAULT_MAP_ZOOM,
+            center=DEFAULT_MAP_CENTER,
             layers=icon_layers,
         ),
         margin=dict(l=0, r=0, t=0, b=0),
@@ -3150,6 +3540,7 @@ def render_gage_panel(data):
 @app.callback(
     Output("compare-year-dropdown", "options"),
     Output("compare-year-dropdown", "value"),
+    Output("compare-year-label", "children"),
     Input("year-slider", "value"),
     State("compare-year-dropdown", "value"),
 )
@@ -3158,7 +3549,8 @@ def update_compare_year_options(primary_year, current_compare):
     # selection if the primary year was just changed to match it
     options = [{"label": str(y), "value": y} for y in years if y != primary_year]
     value = current_compare if current_compare != primary_year else None
-    return options, value
+    label = f"Compare {primary_year} to another year:"
+    return options, value, label
 
 
 # another callback for the barge rate plot
@@ -3170,19 +3562,20 @@ def update_compare_year_options(primary_year, current_compare):
 def update_barge_rate_plot(year, compare_year):
     fig = go.Figure(data=_year_overlay_traces(
         barge_rates, "week_no", "stlrate_per_ton", year, "#d95f0e", "week", "$%{y:.2f}/ton",
-        compare_year=compare_year,
+        compare_year=compare_year, show_other_years_legend=False,
     ))
     fig.update_layout(
         title=dict(
             text="St. Louis to New Orleans Spot Barge Rate",
+            font=dict(size=14),
             subtitle=dict(text="Source: U.S. Department of Agriculture Agricultural Marketing Service", font=dict(size=10, color="#999")),
         ),
         xaxis=dict(tickvals=MONTH_WEEK_TICKVALS, ticktext=MONTH_WEEK_TICKTEXT),
         yaxis_title="Barge Rate ($/ton)",
         yaxis=dict(range=[barge_rates['stlrate_per_ton'].min(), barge_rates['stlrate_per_ton'].max()], hoverformat=".2f"),
-            height=300,legend=dict(
+            height=250,legend=dict(
             x=0.02,y=0.98,xanchor="left",yanchor="top",traceorder="normal",
-            font=dict(size=10),
+            font=dict(size=9),
             bgcolor="rgba(255,255,255,0.6)",bordercolor="black",borderwidth=1),
         margin=dict(l=50, r=20, t=55, b=40),
         hovermode="closest"
@@ -3199,18 +3592,20 @@ def update_barge_rate_nextmonth_plot(year, compare_year):
     fig = go.Figure(data=_year_overlay_traces(
         barge_rates_nextmonth, "week_no", "fwd_rate_per_ton", year, "#8c564b", "week", "$%{y:.2f}/ton",
         compare_year=compare_year, month_label_col="contract_month_label",
+        show_other_years_legend=False,
     ))
     fig.update_layout(
         title=dict(
             text="Forward Barge Rate: 1 Month",
+            font=dict(size=14),
             subtitle=dict(text="Source: U.S. Department of Agriculture Agricultural Marketing Service", font=dict(size=10, color="#999")),
         ),
         xaxis=dict(tickvals=MONTH_WEEK_TICKVALS, ticktext=MONTH_WEEK_TICKTEXT),
         yaxis_title="Barge Rate ($/ton)",
         yaxis=dict(range=[barge_rates_nextmonth['fwd_rate_per_ton'].min(), barge_rates_nextmonth['fwd_rate_per_ton'].max()], hoverformat=".2f"),
-            height=300,legend=dict(
+            height=250,legend=dict(
             x=0.02,y=0.98,xanchor="left",yanchor="top",traceorder="normal",
-            font=dict(size=10),
+            font=dict(size=9),
             bgcolor="rgba(255,255,255,0.6)",bordercolor="black",borderwidth=1),
         margin=dict(l=50, r=20, t=55, b=40),
         hovermode="closest"
@@ -3227,18 +3622,20 @@ def update_barge_rate_threemonth_plot(year, compare_year):
     fig = go.Figure(data=_year_overlay_traces(
         barge_rates_threemonth, "week_no", "fwd_rate_per_ton", year, "#c51b7d", "week", "$%{y:.2f}/ton",
         compare_year=compare_year, month_label_col="contract_month_label",
+        show_other_years_legend=False,
     ))
     fig.update_layout(
         title=dict(
             text="Forward Barge Rate: 3 Months",
+            font=dict(size=14),
             subtitle=dict(text="Source: U.S. Department of Agriculture Agricultural Marketing Service", font=dict(size=10, color="#999")),
         ),
         xaxis=dict(tickvals=MONTH_WEEK_TICKVALS, ticktext=MONTH_WEEK_TICKTEXT),
         yaxis_title="Barge Rate ($/ton)",
         yaxis=dict(range=[barge_rates_threemonth['fwd_rate_per_ton'].min(), barge_rates_threemonth['fwd_rate_per_ton'].max()], hoverformat=".2f"),
-            height=300,legend=dict(
+            height=250,legend=dict(
             x=0.02,y=0.98,xanchor="left",yanchor="top",traceorder="normal",
-            font=dict(size=10),
+            font=dict(size=9),
             bgcolor="rgba(255,255,255,0.6)",bordercolor="black",borderwidth=1),
         margin=dict(l=50, r=20, t=55, b=40),
         hovermode="closest"
@@ -3254,19 +3651,20 @@ def update_barge_rate_threemonth_plot(year, compare_year):
 def update_corn_spread_plot(year, compare_year):
     fig = go.Figure(data=_year_overlay_traces(
         corn_spread, "week_no", "il_gulf_corn_spread", year, "#1b9e77", "date", "$%{y:.2f}/bu",
-        compare_year=compare_year,
+        compare_year=compare_year, show_other_years_legend=False,
     ))
     fig.update_layout(
         title=dict(
             text="Illinois–Gulf Corn Price Spread",
+            font=dict(size=14),
             subtitle=dict(text="Source: U.S. Department of Agriculture Agricultural Marketing Service", font=dict(size=10, color="#999")),
         ),
         xaxis=dict(tickvals=MONTH_WEEK_TICKVALS, ticktext=MONTH_WEEK_TICKTEXT),
         yaxis_title="Spread ($/bushel)",
         yaxis=dict(range=[corn_spread['il_gulf_corn_spread'].min()-0.1, corn_spread['il_gulf_corn_spread'].max()+0.1], hoverformat=".2f"),
-            height=300,legend=dict(
+            height=250,legend=dict(
             x=0.02,y=0.98,xanchor="left",yanchor="top",traceorder="normal",
-            font=dict(size=10),
+            font=dict(size=9),
             bgcolor="rgba(255,255,255,0.6)",bordercolor="black",borderwidth=1),
         margin=dict(l=50, r=20, t=55, b=40),
         hovermode="closest"
@@ -3282,19 +3680,20 @@ def update_corn_spread_plot(year, compare_year):
 def update_cornprice_plot(year, compare_year):
     fig = go.Figure(data=_year_overlay_traces(
         corn_price, "week_no", "gulf_corn_price", year, "#006837", "date", "$%{y:.2f}/bu",
-        compare_year=compare_year,
+        compare_year=compare_year, show_other_years_legend=False,
     ))
     fig.update_layout(
         title=dict(
             text="Gulf Corn Price",
+            font=dict(size=14),
             subtitle=dict(text="Source: U.S. Department of Agriculture Agricultural Marketing Service", font=dict(size=10, color="#999")),
         ),
         xaxis=dict(tickvals=MONTH_WEEK_TICKVALS, ticktext=MONTH_WEEK_TICKTEXT),
         yaxis_title="Price ($/bushel)",
         yaxis=dict(range=[corn_price['gulf_corn_price'].min()-0.1, corn_price['gulf_corn_price'].max()+0.1], hoverformat=".2f"),
-        height=300,legend=dict(
+        height=250,legend=dict(
            x=0.02,y=0.98,xanchor="left",yanchor="top",traceorder="normal",
-           font=dict(size=10),
+           font=dict(size=9),
            bgcolor="rgba(255,255,255,0.6)",bordercolor="black",borderwidth=1),
         margin=dict(l=50, r=20, t=55, b=40),
         hovermode="closest"
@@ -3309,19 +3708,20 @@ def update_cornprice_plot(year, compare_year):
 def update_soyprice_plot(year, compare_year):
     fig = go.Figure(data=_year_overlay_traces(
         soy_price, "week_no", "gulf_soy_price", year, "#f1a340", "date", "$%{y:.2f}/bu",
-        compare_year=compare_year,
+        compare_year=compare_year, show_other_years_legend=False,
     ))
     fig.update_layout(
         title=dict(
             text="Gulf Soybean Price",
+            font=dict(size=14),
             subtitle=dict(text="Source: U.S. Department of Agriculture Agricultural Marketing Service", font=dict(size=10, color="#999")),
         ),
         xaxis=dict(tickvals=MONTH_WEEK_TICKVALS, ticktext=MONTH_WEEK_TICKTEXT),
         yaxis_title="Price ($/bushel)",
         yaxis=dict(range=[soy_price['gulf_soy_price'].min()-0.1, soy_price['gulf_soy_price'].max()+0.1], hoverformat=".2f"),
-        height=300,legend=dict(
+        height=250,legend=dict(
            x=0.02,y=0.98,xanchor="left",yanchor="top",traceorder="normal",
-           font=dict(size=10),
+           font=dict(size=9),
            bgcolor="rgba(255,255,255,0.6)",bordercolor="black",borderwidth=1),
         margin=dict(l=50, r=20, t=55, b=40),
         hovermode="closest"
@@ -3335,26 +3735,7 @@ def update_soyprice_plot(year, compare_year):
     Input("compare-year-dropdown", "value"),
 )
 def update_memphis_stage_plot(year, compare_year):
-    fig = go.Figure(data=_year_overlay_traces(
-        memphis_stage, "week_no", "stage", year, "#2166ac", "date", "%{y:.2f} ft",
-        compare_year=compare_year,
-    ))
-    fig.update_layout(
-        title=dict(
-            text="Memphis River Stage",
-            subtitle=dict(text="Source: NOAA National Weather Service", font=dict(size=10, color="#999")),
-        ),
-        xaxis=dict(tickvals=MONTH_WEEK_TICKVALS, ticktext=MONTH_WEEK_TICKTEXT),
-        yaxis_title="Stage (ft)",
-        yaxis=dict(range=[memphis_stage['stage'].min()-1, memphis_stage['stage'].max()+1], hoverformat=".2f"),
-        height=300,legend=dict(
-           x=0.02,y=0.98,xanchor="left",yanchor="top",traceorder="normal",
-           font=dict(size=10),
-           bgcolor="rgba(255,255,255,0.6)",bordercolor="black",borderwidth=1),
-        margin=dict(l=50, r=20, t=55, b=40),
-        hovermode="closest"
-    )
-    return fig
+    return _build_memphis_stage_fig(year, compare_year)
 # --------------------------------------------------
 # RUN
 # --------------------------------------------------

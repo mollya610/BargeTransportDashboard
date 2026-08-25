@@ -2,8 +2,16 @@
 Stage 5: generate per-survey depth-bin polygon files.
 
 For each survey gpkg in NAVD88Files/, computes depth under the Low Water Reference
-Plane (LWRP) at every survey point, bins the points by depth, buffers + dissolves
-each bin into a polygon, and writes one GeoJSON per survey to data/DepthPolygons/.
+Plane (LWRP) at every survey point, bins each point to its nearest whole foot of depth,
+buffers + dissolves each whole-foot bin into a polygon, and writes one GeoJSON per
+survey to data/DepthPolygons/.
+
+Whole-foot resolution (not the old coarser named bands) is what lets
+make_combined_depth_polygons.py later shift a survey by an exact stage offset and still
+regroup precisely -- a survey stored pre-bucketed into e.g. "<5 ft" couldn't tell a point
+at 0.2ft from one at 4.9ft, which matters once you're adding a 10+ft stage offset to it.
+The coarse "<5 ft / 5-9 ft / ..." bands users actually see are applied later, in
+make_combined_depth_polygons.py's DISPLAY_BINS, after that shift.
 
 Run after process_surveys.py (and optionally compute_bathym_stats.py).
 Re-runs are safe: already-processed surveys are skipped.
@@ -41,38 +49,6 @@ SIMPLIFY_M = 5       # simplify tolerance on dissolved polygons
 # change to the output polygons.
 DOWNSAMPLE_THRESHOLD_PTS = 150_000
 GRID_CELL_M = 20
-
-# Depth bins: (lower_inclusive, upper_exclusive, label)
-# None = unbounded on that side
-DEPTH_BINS = [
-    (20,   None,  ">20 ft"),
-    (17.5, 20,    "17.5-20 ft"),
-    (15,   17.5,  "15-17.5 ft"),
-    (14,   15,    "14-15 ft"),
-    (13,   14,    "13-14 ft"),
-    (12,   13,    "12-13 ft"),
-    (11,   12,    "11-12 ft"),
-    (10,   11,    "10-11 ft"),
-    (9,    10,    "9-10 ft"),
-    (8,    9,     "8-9 ft"),
-    (7,    8,     "7-8 ft"),
-    (6,    7,     "6-7 ft"),
-    (5,    6,     "5-6 ft"),
-    (None, 5,     "<5 ft"),
-]
-# For ordering depth bins in the output (deep → shallow)
-BIN_ORDER = {label: i for i, (_, _, label) in enumerate(DEPTH_BINS)}
-
-
-def assign_bin(depth):
-    for lo, hi, label in DEPTH_BINS:
-        if lo is not None and depth < lo:
-            continue
-        if hi is not None and depth >= hi:
-            continue
-        return label
-    return None
-
 
 def interp_lwrp(mile, df, mile_col, navd_col):
     """Linearly interpolate LWRP NAVD88 elevation at a given river mile."""
@@ -143,10 +119,10 @@ for fpath in new_files:
     combined_mile = mile if is_lm else mile + 953
     lwrp = interp_lwrp(combined_mile, datum_info, "MileMarker", "thresh_el")
 
-    # Depth under LWRP at each point
+    # Depth under LWRP at each point, rounded to its nearest whole foot -- see module
+    # docstring for why whole feet instead of named bands.
     gdf_utm["depth_ft"] = lwrp - gdf_utm["Z_navd88"]
-    gdf_utm["depth_bin"] = gdf_utm["depth_ft"].apply(assign_bin)
-    gdf_utm = gdf_utm.dropna(subset=["depth_bin"])
+    gdf_utm["depth_bin"] = gdf_utm["depth_ft"].round().astype(int)
 
     if gdf_utm.empty:
         print(f"{survey_id}: no points after binning, skipping")
@@ -172,7 +148,9 @@ for fpath in new_files:
     dissolved["date"] = survey_date
     dissolved["year"] = pd.to_datetime(survey_date, utc=True).year
     dissolved["mile"] = round(mile, 1)
-    dissolved["bin_order"] = dissolved["depth_bin"].map(BIN_ORDER)
+    # deepest first, matching the old named-band convention -- purely a z-draw-order
+    # hint for app.py, not meaningful on its own
+    dissolved["bin_order"] = -dissolved["depth_bin"]
 
     dissolved = gpd.GeoDataFrame(dissolved, geometry="geometry", crs=UTM_CRS).to_crs("EPSG:4326")
 

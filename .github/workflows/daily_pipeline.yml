@@ -47,6 +47,12 @@ jobs:
       - name: Fetch river stage readings
         run: python fetch_stage.py
 
+      # Recombine this year's depth polygons shifted to today's stage -- must run
+      # after fetch_stage.py above (needs today's reading) and make_depth_polygons.py
+      # above (needs any newly confirmed surveys' per-survey files).
+      - name: Recompute current-conditions river depth polygon
+        run: python update_bathym/make_combined_depth_polygons.py
+
       # ── Barge rates / corn / soy prices / Dec-corn & Nov-soy futures ─────────
       - name: Fetch barge rate and price data
         env:
