@@ -8,20 +8,26 @@ this redo -- see that file for how the 2021-2025 survey set was split into
 
 For a given chunk this removes the survey from every place a pipeline stage
 checks to decide "already done":
-  - lm_ids_done.csv / um_ids_done.csv      (check_for_surveys.py)
-  - data/SurveyPointLayers/{id}_SurveyPoint.gpkg (+ {id}_gdb/)  (read_in_surveys.py)
-  - data/NAVD88Files, ActualDepthFiles, OtherDatumFiles/{id}*.gpkg (process_surveys.py)
-  - bathym_fixed.csv rows for that survey                        (compute_bathym_stats.py)
-  - data/DepthPolygons/{id}_depth_polygons.geojson                (make_depth_polygons.py)
+  - lm_ids_done.csv / um_ids_done.csv      (1_check_for_surveys.py)
+  - data/SurveyPointLayers/{id}_SurveyPoint.gpkg (+ {id}_gdb/)  (2_read_in_surveys.py)
+  - data/NAVD88Files, ActualDepthFiles, OtherDatumFiles/{id}*.gpkg (3_process_surveys.py)
+  - bathym_fixed.csv rows for that survey                        (4_compute_thresh_depth.py)
+  - data/NavigableWidth/{id}_transects.geojson                    (7_compute_navigable_width.py)
+  - navigable_width_profile.csv rows for that survey              (7_compute_navigable_width.py)
+  - data/WidthByStage/{id}_width_by_stage.csv                     (8_compute_width_by_stage.py)
+  - data/WidthByStage/{id}_navigable_path.geojson                 (8_compute_width_by_stage.py)
+  - data/DepthPolygons/{id}_depth_polygons.geojson                (9_make_depth_polygons.py)
 
 Defaults to a dry run (prints what it would delete). Pass --confirm to
 actually delete. After deleting a chunk, redownload it by running in order:
-    python check_for_surveys.py
-    python read_in_surveys.py
-    python process_surveys.py
-    python compute_bathym_stats.py
-    python review_surveys.py   (manual review in the browser)
-    python make_depth_polygons.py   (after everything in the chunk is confirmed)
+    python 1_check_for_surveys.py
+    python 2_read_in_surveys.py
+    python 3_process_surveys.py
+    python 4_compute_thresh_depth.py
+    python 6_review_surveys.py   (manual sign-flip check in the browser)
+    python 7_compute_navigable_width.py
+    python 8_compute_width_by_stage.py
+    python 9_make_depth_polygons.py
 """
 
 import argparse
@@ -38,12 +44,15 @@ MANIFEST_FILE = SCRIPT_DIR / "redo_chunks_manifest.csv"
 LM_DONE_FILE = SCRIPT_DIR / "lm_ids_done.csv"
 UM_DONE_FILE = SCRIPT_DIR / "um_ids_done.csv"
 BATHYM_FIXED_FILE = REPO_ROOT / "bathym_fixed.csv"
+PROFILE_FILE = REPO_ROOT / "navigable_width_profile.csv"
 
 SURVEYPOINT_DIR = DATA_DIR / "SurveyPointLayers"
 NAVD88_DIR = DATA_DIR / "NAVD88Files"
 ACTUALDEPTH_DIR = DATA_DIR / "ActualDepthFiles"
 OTHER_DIR = DATA_DIR / "OtherDatumFiles"
 DEPTHPOLY_DIR = DATA_DIR / "DepthPolygons"
+NAVWIDTH_DIR = DATA_DIR / "NavigableWidth"
+WIDTHBYSTAGE_DIR = DATA_DIR / "WidthByStage"
 
 
 def main():
@@ -121,11 +130,42 @@ def main():
     else:
         print("DepthPolygons: dir not found, skipping")
 
+    # ---- 5. navigable-width outputs (7_compute_navigable_width.py) ----
+    if NAVWIDTH_DIR.exists():
+        matched = [p for p in NAVWIDTH_DIR.glob("*_transects.geojson") if any(p.name.startswith(sid) for sid in target_ids)]
+        print(f"NavigableWidth: {len(matched)} file(s) to remove")
+        if args.confirm:
+            for p in matched:
+                p.unlink(missing_ok=True)
+    else:
+        print("NavigableWidth: dir not found, skipping")
+
+    if PROFILE_FILE.exists():
+        prof = pd.read_csv(PROFILE_FILE)
+        hit = prof["survey_id"].isin(target_ids)
+        print(f"navigable_width_profile.csv: {hit.sum()} rows to remove (of {len(prof)})")
+        if args.confirm and hit.any():
+            prof[~hit].to_csv(PROFILE_FILE, index=False)
+    else:
+        print("navigable_width_profile.csv: not found, skipping")
+
+    # ---- 6. width-by-stage outputs (8_compute_width_by_stage.py) ----
+    if WIDTHBYSTAGE_DIR.exists():
+        matched = [p for p in WIDTHBYSTAGE_DIR.glob("*_width_by_stage.csv") if any(p.name.startswith(sid) for sid in target_ids)]
+        matched += [p for p in WIDTHBYSTAGE_DIR.glob("*_navigable_path.geojson") if any(p.name.startswith(sid) for sid in target_ids)]
+        print(f"WidthByStage: {len(matched)} file(s) to remove")
+        if args.confirm:
+            for p in matched:
+                p.unlink(missing_ok=True)
+    else:
+        print("WidthByStage: dir not found, skipping")
+
     if not args.confirm:
         print("\nDry run only -- nothing was deleted. Re-run with --confirm to apply.")
     else:
-        print(f"\nChunk {args.chunk} deleted. Next: run check_for_surveys.py -> read_in_surveys.py -> "
-              f"process_surveys.py -> compute_bathym_stats.py -> review_surveys.py -> make_depth_polygons.py.")
+        print(f"\nChunk {args.chunk} deleted. Next: run 1_check_for_surveys.py -> 2_read_in_surveys.py -> "
+              f"3_process_surveys.py -> 4_compute_thresh_depth.py -> 6_review_surveys.py (manual) -> "
+              f"7_compute_navigable_width.py -> 8_compute_width_by_stage.py -> 9_make_depth_polygons.py.")
 
 
 if __name__ == "__main__":

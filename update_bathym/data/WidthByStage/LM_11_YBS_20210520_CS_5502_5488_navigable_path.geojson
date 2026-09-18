@@ -1,0 +1,8 @@
+{
+"type": "FeatureCollection",
+"name": "LM_11_YBS_20210520_CS_5502_5488_navigable_path",
+"crs": { "type": "name", "properties": { "name": "urn:ogc:def:crs:OGC:1.3:CRS84" } },
+"features": [
+{ "type": "Feature", "properties": { "survey_id": "LM_11_YBS_20210520_CS_5502_5488", "method": "lines", "connected": "no", "through_width_ft": 1958.0, "gage": "Greenville", "anchor_stage_ft": 7 }, "geometry": { "type": "LineString", "coordinates": [ [ -91.197190665638843, 33.512310321358775 ], [ -91.194666549262664, 33.510460340043295 ], [ -91.191825582550933, 33.508650728324554 ], [ -91.188816318397187, 33.507194629427332 ], [ -91.185926367558636, 33.505511410513897 ] ] } }
+]
+}

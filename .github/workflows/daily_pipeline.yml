@@ -24,20 +24,31 @@ jobs:
         run: pip install -r requirements.txt
 
       # ── Bathymetry survey pipeline ────────────────────────────────────────────
+      # 6_review_surveys.py (sign-flip check) is manual/local, not run here -- new
+      # surveys land at confirmed="no" and just sit there (7, 8, and 9 all skip
+      # anything unconfirmed) until Molly reviews and pushes locally, same as before.
+      # 7 and 8 both need each survey's raw NAVD88Files gpkg, so must run before
+      # 9_make_depth_polygons.py deletes it.
       - name: Check for new survey IDs
-        run: python update_bathym/check_for_surveys.py
+        run: python update_bathym/1_check_for_surveys.py
 
       - name: Download new surveys
-        run: python update_bathym/read_in_surveys.py
+        run: python update_bathym/2_read_in_surveys.py
 
       - name: Convert datums
-        run: python update_bathym/process_surveys.py
+        run: python update_bathym/3_process_surveys.py
 
-      - name: Compute bathymetry stats
-        run: python update_bathym/compute_bathym_stats.py
+      - name: Compute threshold depths
+        run: python update_bathym/4_compute_thresh_depth.py
+
+      - name: Compute navigable width
+        run: python update_bathym/7_compute_navigable_width.py
+
+      - name: Compute width by hypothetical stage
+        run: python update_bathym/8_compute_width_by_stage.py
 
       - name: Generate depth polygons
-        run: python update_bathym/make_depth_polygons.py
+        run: python update_bathym/9_make_depth_polygons.py
 
       # ── Notice pipeline ───────────────────────────────────────────────────────
       - name: Fetch new USCG notices
@@ -48,7 +59,7 @@ jobs:
         run: python fetch_stage.py
 
       # Recombine this year's depth polygons shifted to today's stage -- must run
-      # after fetch_stage.py above (needs today's reading) and make_depth_polygons.py
+      # after fetch_stage.py above (needs today's reading) and 9_make_depth_polygons.py
       # above (needs any newly confirmed surveys' per-survey files).
       - name: Recompute current-conditions river depth polygon
         run: python update_bathym/make_combined_depth_polygons.py
@@ -76,6 +87,8 @@ jobs:
             bathym_fixed.csv \
             update_bathym/data/DepthPolygons/ \
             update_bathym/data/NAVD88Files/ \
+            update_bathym/data/NavigableWidth/ \
+            update_bathym/data/WidthByStage/ \
             update_bathym/lm_ids_done.csv \
             update_bathym/um_ids_done.csv \
             notices_*.xlsx \
@@ -87,6 +100,9 @@ jobs:
             futures_dec_nov_history.csv \
             wasde_production_estimate.csv \
             grain_production_history.csv 2>/dev/null || true
+          # only created once a "blob"-method survey has ever been processed -- a plain
+          # git add above would abort the whole chain above on a day it doesn't exist yet
+          [ -f navigable_width_profile.csv ] && git add navigable_width_profile.csv
           if git diff --cached --quiet; then
             echo "new_data=false" >> "$GITHUB_OUTPUT"
             echo "Nothing changed — no commit needed."
@@ -115,7 +131,7 @@ jobs:
             --assignee mollya610 \
             --body "@mollya610 the daily pipeline found new surveys or notices.
 
-          **Bathymetry surveys** — pull latest, then run \`python update_bathym/review_surveys.py\` locally and open http://127.0.0.1:8060 to review pending surveys (rows where \`confirmed=no\` in \`bathym_fixed.csv\`). Approving writes \`confirmed\`/\`at_risk\` back to the CSV. Push when done — those surveys will appear on the live site after Render redeploys and the next daily run generates their depth polygons.
+          **Bathymetry surveys** — pull latest, then run \`python update_bathym/6_review_surveys.py\` locally and open http://127.0.0.1:8060 to check pending surveys (rows where \`confirmed=no\` in \`bathym_fixed.csv\`) for a flipped depth sign — that's the only judgment call left; navigation-risk coloring is computed automatically. Approving writes \`confirmed=yes\`. Push when done — those surveys will appear on the live site after Render redeploys and the next daily run computes their navigable width and depth polygons.
 
           **Notices** — open \`notices_YYYY.xlsx\` for the relevant year. New rows have \`confirmed\` blank — fill in any missing fields and set \`confirmed=Y\` to show the notice on the map, or leave blank/set to N to hide it. Push the updated file when done.
 

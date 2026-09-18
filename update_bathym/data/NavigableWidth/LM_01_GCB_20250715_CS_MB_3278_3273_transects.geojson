@@ -1,0 +1,9 @@
+{
+"type": "FeatureCollection",
+"name": "LM_01_GCB_20250715_CS_MB_3278_3273_transects",
+"crs": { "type": "name", "properties": { "name": "urn:ogc:def:crs:OGC:1.3:CRS84" } },
+"features": [
+{ "type": "Feature", "properties": { "station_id": 0, "station_ft": 212.1, "width_ft": 754.6, "flag": "ok", "lon": -91.638996, "lat": 31.22894, "survey_id": "LM_01_GCB_20250715_CS_MB_3278_3273", "date": "2025-07-15 00:00:00+00:00", "method": "blob" }, "geometry": { "type": "LineString", "coordinates": [ [ -91.638923029508831, 31.228875023462376 ], [ -91.640609219654507, 31.230360105012025 ] ] } },
+{ "type": "Feature", "properties": { "station_id": 1, "station_ft": 636.4, "width_ft": 721.8, "flag": "ok", "lon": -91.638036, "lat": 31.228929, "survey_id": "LM_01_GCB_20250715_CS_MB_3278_3273", "date": "2025-07-15 00:00:00+00:00", "method": "blob" }, "geometry": { "type": "LineString", "coordinates": [ [ -91.6387127472873, 31.228362451898231 ], [ -91.63705964582428, 31.22974838936771 ] ] } }
+]
+}

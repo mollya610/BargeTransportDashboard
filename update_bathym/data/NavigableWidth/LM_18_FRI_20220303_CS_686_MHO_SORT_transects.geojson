@@ -1,0 +1,11 @@
+{
+"type": "FeatureCollection",
+"name": "LM_18_FRI_20220303_CS_686_MHO_SORT_transects",
+"crs": { "type": "name", "properties": { "name": "urn:ogc:def:crs:OGC:1.3:CRS84" } },
+"features": [
+{ "type": "Feature", "properties": { "station_id": 0, "station_ft": 162.5, "width_ft": 984.3, "flag": "ok", "lon": -90.465509, "lat": 34.727673, "survey_id": "LM_18_FRI_20220303_CS_686_MHO_SORT", "date": "2022-03-03 00:00:00+00:00", "method": "blob" }, "geometry": { "type": "LineString", "coordinates": [ [ -90.465035810911345, 34.726664122892139 ], [ -90.466218687917035, 34.729185133742853 ] ] } },
+{ "type": "Feature", "properties": { "station_id": 1, "station_ft": 479.6, "width_ft": 1082.7, "flag": "ok", "lon": -90.464503, "lat": 34.727926, "survey_id": "LM_18_FRI_20220303_CS_686_MHO_SORT", "date": "2022-03-03 00:00:00+00:00", "method": "blob" }, "geometry": { "type": "LineString", "coordinates": [ [ -90.464241037025388, 34.726958881587045 ], [ -90.465026274994486, 34.729861272005287 ] ] } },
+{ "type": "Feature", "properties": { "station_id": 2, "station_ft": 884.2, "width_ft": 1049.9, "flag": "ok", "lon": -90.463485, "lat": 34.728558, "survey_id": "LM_18_FRI_20220303_CS_686_MHO_SORT", "date": "2022-03-03 00:00:00+00:00", "method": "blob" }, "geometry": { "type": "LineString", "coordinates": [ [ -90.462542979174543, 34.727943116576498 ], [ -90.465283601295639, 34.729731036549005 ] ] } },
+{ "type": "Feature", "properties": { "station_id": 3, "station_ft": 1288.8, "width_ft": 885.8, "flag": "ok", "lon": -90.462467, "lat": 34.729189, "survey_id": "LM_18_FRI_20220303_CS_686_MHO_SORT", "date": "2022-03-03 00:00:00+00:00", "method": "blob" }, "geometry": { "type": "LineString", "coordinates": [ [ -90.46222938909078, 34.728309570604587 ], [ -90.462871802599338, 34.730684262064386 ] ] } }
+]
+}

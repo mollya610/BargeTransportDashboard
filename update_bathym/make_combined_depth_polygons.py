@@ -5,7 +5,7 @@ plot ~6 traces instead of one per survey (~1,000+ for a year like 2026).
 
 Where two surveys' areas overlap, the more recent survey wins: older surveys' polygons
 are clipped to remove any area a newer survey also covers, before everything left is
-unioned per display band. Run any time after make_depth_polygons.py (stage 5) has
+unioned per display band. Run any time after 9_make_depth_polygons.py (stage 8) has
 produced the individual per-survey files for the year -- always rebuilds from scratch,
 so it's safe to re-run whenever new surveys are confirmed/reviewed.
 
@@ -20,7 +20,7 @@ is really at 9+(5-(-10)) = 24ft today. The target stage is either today's actual
 (the default, current-year-only "current conditions" file) or one of the fixed
 LOW_WATER_YEARS stages (for a fixed historical scenario applied to the current year's
 surveys) -- see combine_year's stage param. Whole-foot source resolution (from
-make_depth_polygons.py) is what makes this shift exact rather than an approximation, and
+9_make_depth_polygons.py) is what makes this shift exact rather than an approximation, and
 only after shifting does a point get bucketed into the coarse DISPLAY_BINS band actually
 drawn on the map. A year with no target stage (a past year, or the current year if
 "today" and no stage feed is available) is combined at its native LWRP depth --
@@ -53,7 +53,7 @@ DEPTH_POLY_DIR = SCRIPT_DIR / "data" / "DepthPolygons"
 BATHYM_FIXED = REPO_ROOT / "bathym_fixed.csv"
 STAGE_HISTORY_FILE = REPO_ROOT / "river_stage_history.csv"
 
-UTM_CRS = "EPSG:26915"  # same projected CRS make_depth_polygons.py buffers/dissolves in
+UTM_CRS = "EPSG:26915"  # same projected CRS 9_make_depth_polygons.py buffers/dissolves in
 
 # Same three low-water anchors app.py's GAGE_THRESHOLDS uses for the gage panel -- keep
 # these two in sync if the thresholds are ever recalculated
@@ -83,8 +83,8 @@ LOW_WATER_YEARS = {
 }
 
 # Coarse bands actually drawn on the map. Applied here, after a survey's exact
-# whole-foot depths (from make_depth_polygons.py) have been shifted to a target stage --
-# not in make_depth_polygons.py itself, see module docstring.
+# whole-foot depths (from 9_make_depth_polygons.py) have been shifted to a target stage --
+# not in 9_make_depth_polygons.py itself, see module docstring.
 DISPLAY_BINS = [
     (20,   None,  "20+ ft"),
     (15,   20,    "15-20 ft"),
@@ -138,14 +138,14 @@ def _survey_offset(survey_id, mile, today_stage):
 
 
 def _display_bin(depth, offset):
-    """depth is a per-survey file's exact whole-foot value (see make_depth_polygons.py);
+    """depth is a per-survey file's exact whole-foot value (see 9_make_depth_polygons.py);
     offset is None when no target stage is available for this survey's gage, treated as
     0ft -- native LWRP depth, still bucketed into a display band."""
     return assign_display_bin(depth + (offset or 0))
 
 # This layer is a river-wide overview drawn at zoom levels where a single survey's ~40m
 # point buffer is already sub-pixel (see app.py's _add_depth_polygon_traces comment) --
-# so it can take a much coarser tolerance than the 5m make_depth_polygons.py uses for
+# so it can take a much coarser tolerance than the 5m 9_make_depth_polygons.py uses for
 # per-survey detail views. 25m cut the combined file from ~223k coordinate pairs across
 # ~17k disjoint islands (most of them tiny buffer-circle leftovers under a few hundred
 # m^2) down to a small fraction of that, with no visible difference at any zoom this

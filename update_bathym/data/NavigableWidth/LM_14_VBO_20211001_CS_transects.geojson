@@ -1,0 +1,8 @@
+{
+"type": "FeatureCollection",
+"name": "LM_14_VBO_20211001_CS_transects",
+"crs": { "type": "name", "properties": { "name": "urn:ogc:def:crs:OGC:1.3:CRS84" } },
+"features": [
+{ "type": "Feature", "properties": { "station_id": 0, "station_ft": 154.6, "width_ft": 65.6, "flag": "ok", "lon": -91.066716, "lat": 33.878001, "survey_id": "LM_14_VBO_20211001_CS", "date": "2021-10-01 00:00:00+00:00", "method": "blob" }, "geometry": { "type": "LineString", "coordinates": [ [ -91.066610940653831, 33.878021230861783 ], [ -91.066821613927772, 33.877980797632191 ] ] } }
+]
+}

@@ -1,0 +1,13 @@
+{
+"type": "FeatureCollection",
+"name": "LM_15_CVB_20250416_CS_MB_5978_5973_transects",
+"crs": { "type": "name", "properties": { "name": "urn:ogc:def:crs:OGC:1.3:CRS84" } },
+"features": [
+{ "type": "Feature", "properties": { "station_id": 0, "station_ft": 167.7, "width_ft": 426.5, "flag": "ok", "lon": -91.052917, "lat": 33.950761, "survey_id": "LM_15_CVB_20250416_CS_MB_5978_5973", "date": "2025-04-16 00:00:00+00:00", "method": "blob" }, "geometry": { "type": "LineString", "coordinates": [ [ -91.05291657245013, 33.950760904760408 ], [ -91.052263861452801, 33.951799033898972 ] ] } },
+{ "type": "Feature", "properties": { "station_id": 1, "station_ft": 556.6, "width_ft": 0.0, "flag": "ok", "lon": -91.051942, "lat": 33.950093, "survey_id": "LM_15_CVB_20250416_CS_MB_5978_5973", "date": "2025-04-16 00:00:00+00:00", "method": "blob" }, "geometry": { "type": "LineString", "coordinates": [ [ -91.051942420319023, 33.950092745612793 ], [ -91.051942420319023, 33.950092745612793 ] ] } },
+{ "type": "Feature", "properties": { "station_id": 2, "station_ft": 998.9, "width_ft": 1640.4, "flag": "ok", "lon": -91.050953, "lat": 33.950077, "survey_id": "LM_15_CVB_20250416_CS_MB_5978_5973", "date": "2025-04-16 00:00:00+00:00", "method": "blob" }, "geometry": { "type": "LineString", "coordinates": [ [ -91.049469862261091, 33.948891528174279 ], [ -91.053374006403445, 33.95201137951998 ] ] } },
+{ "type": "Feature", "properties": { "station_id": 3, "station_ft": 1374.6, "width_ft": 1345.1, "flag": "ok", "lon": -91.049952, "lat": 33.950611, "survey_id": "LM_15_CVB_20250416_CS_MB_5978_5973", "date": "2025-04-16 00:00:00+00:00", "method": "blob" }, "geometry": { "type": "LineString", "coordinates": [ [ -91.049200507248145, 33.947887173001845 ], [ -91.050194227734323, 33.951489514691715 ] ] } },
+{ "type": "Feature", "properties": { "station_id": 4, "station_ft": 1679.8, "width_ft": 1542.0, "flag": "ok", "lon": -91.04896, "lat": 33.950733, "survey_id": "LM_15_CVB_20250416_CS_MB_5978_5973", "date": "2025-04-16 00:00:00+00:00", "method": "blob" }, "geometry": { "type": "LineString", "coordinates": [ [ -91.048675503202688, 33.947043877774256 ], [ -91.049001282087659, 33.951272399553645 ] ] } },
+{ "type": "Feature", "properties": { "station_id": 5, "station_ft": 1980.8, "width_ft": 984.3, "flag": "ok", "lon": -91.047971, "lat": 33.950717, "survey_id": "LM_15_CVB_20250416_CS_MB_5978_5973", "date": "2025-04-16 00:00:00+00:00", "method": "blob" }, "geometry": { "type": "LineString", "coordinates": [ [ -91.048257542404016, 33.948385129661524 ], [ -91.047926533542892, 33.951075638154784 ] ] } }
+]
+}

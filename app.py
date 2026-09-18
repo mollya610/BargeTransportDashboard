@@ -103,7 +103,37 @@ years = sorted(bathy["year"].unique())
 years = [int(y) for y in years if 2021 <= int(y) < date.today().year]
 DEFAULT_HISTORIC_YEAR = years[-1]  # most recent completed year -- Historic Conditions opens here
 
-bathy["at_risk_eff"] = bathy["at_risk"].fillna("low") if "at_risk" in bathy.columns else "low"
+# Risk classification: 6_review_surveys.py's manual at_risk field is retired in favor of
+# 7_compute_navigable_width.py's objective vessel_path_connected/width_ft (whether a
+# continuous WIDTH_TARGET_DEPTH_FT-deep path exists across the reach, and how wide it
+# is). Falls back to the legacy at_risk column for any survey stage 7 hasn't measured
+# yet, and to "low" if neither is available.
+NAVIGABLE_WIDTH_HIGH_FT = 300   # below this: High risk
+NAVIGABLE_WIDTH_LOW_FT = 800    # this and above: Low risk (between the two: Medium)
+
+
+def _risk_from_vessel_path(row):
+    connected = str(row.get("vessel_path_connected", "")).strip().lower()
+    if connected == "no":
+        return "high"
+    if connected != "yes":
+        return None  # not yet measured by 7_compute_navigable_width.py
+    width_ft = row.get("vessel_path_width_ft")
+    if pd.isna(width_ft):
+        return None
+    if width_ft < NAVIGABLE_WIDTH_HIGH_FT:
+        return "high"
+    if width_ft < NAVIGABLE_WIDTH_LOW_FT:
+        return "medium"
+    return "low"
+
+
+if "vessel_path_connected" in bathy.columns:
+    _vessel_risk = bathy.apply(_risk_from_vessel_path, axis=1)
+else:
+    _vessel_risk = pd.Series(None, index=bathy.index, dtype=object)
+_legacy_risk = bathy["at_risk"] if "at_risk" in bathy.columns else pd.Series(None, index=bathy.index, dtype=object)
+bathy["at_risk_eff"] = _vessel_risk.fillna(_legacy_risk).fillna("low")
 
 # get center point for bathym measures
 bathy["geometry"] = bathy["geometry"].apply(wkt.loads)
@@ -113,17 +143,20 @@ bathy["LON"] = bathy["rep_point"].apply(lambda p: p.x)
 bathy["LAT"] = bathy["rep_point"].apply(lambda p: p.y)
 bathy = pd.DataFrame(bathy.drop(columns=["geometry", "rep_point"]))
 
-# for at-risk surveys, the reviewer can mark the exact problem spot within the
-# surveyed area (review_surveys.py) -- plot the dot there instead of the survey's
-# overall center so it points at the actual issue on a large survey. Full (not at
-# risk) surveys always show at their overall center, marked surveys keep no other
-# behavior change.
-if "problem_lon" in bathy.columns and "problem_lat" in bathy.columns:
-    problem_lon = pd.to_numeric(bathy["problem_lon"], errors="coerce")
-    problem_lat = pd.to_numeric(bathy["problem_lat"], errors="coerce")
-    has_problem_point = bathy["at_risk_eff"].isin(["medium", "high"]) & problem_lon.notna() & problem_lat.notna()
-    bathy.loc[has_problem_point, "LON"] = problem_lon[has_problem_point]
-    bathy.loc[has_problem_point, "LAT"] = problem_lat[has_problem_point]
+# for at-risk surveys, plot the dot at the actual problem spot within the surveyed area
+# instead of the survey's overall center: 7_compute_navigable_width.py's bottleneck point
+# (where the navigable path is narrowest or breaks entirely) when available, falling back
+# to 6_review_surveys.py's manually marked problem_lon/lat for surveys stage 7 hasn't
+# measured yet. Full (low-risk) surveys always show at their overall center.
+_bottleneck_lon = pd.to_numeric(bathy["vessel_path_bottleneck_lon"], errors="coerce") if "vessel_path_bottleneck_lon" in bathy.columns else pd.Series(np.nan, index=bathy.index)
+_bottleneck_lat = pd.to_numeric(bathy["vessel_path_bottleneck_lat"], errors="coerce") if "vessel_path_bottleneck_lat" in bathy.columns else pd.Series(np.nan, index=bathy.index)
+_legacy_lon = pd.to_numeric(bathy["problem_lon"], errors="coerce") if "problem_lon" in bathy.columns else pd.Series(np.nan, index=bathy.index)
+_legacy_lat = pd.to_numeric(bathy["problem_lat"], errors="coerce") if "problem_lat" in bathy.columns else pd.Series(np.nan, index=bathy.index)
+problem_lon = _bottleneck_lon.fillna(_legacy_lon)
+problem_lat = _bottleneck_lat.fillna(_legacy_lat)
+has_problem_point = bathy["at_risk_eff"].isin(["medium", "high"]) & problem_lon.notna() & problem_lat.notna()
+bathy.loc[has_problem_point, "LON"] = problem_lon[has_problem_point]
+bathy.loc[has_problem_point, "LAT"] = problem_lat[has_problem_point]
 bathy["survey_id"] = (
     bathy["file"]
     .str.replace("_SurveyPoint.gpkg", "", regex=False)
@@ -177,16 +210,6 @@ DRAFT_ANNOUNCED_OPACITY = 0.45
 DRAFT_IN_PLACE_OPACITY = 0.85
 BIG, MED, SMALL = "18px", "14px", "11px"
 
-# bathymetry survey points are colored by the review app's at_risk flag (low/medium/high),
-# not a depth threshold. Low and Medium render as plain colored dots; High gets the same
-# custom warning-icon treatment as the old binary "At Risk" tier (see icon_layers below).
-# Legacy/blank rows (from before at_risk existed) default to "low".
-RISK_BINS = [
-    ("Low Risk", "#2e7d32", 9),
-    ("Medium Risk", "#fb8c00", 12),
-    ("High Risk", "#e53935", 16),
-]
-
 # the workbook uses short river codes rather than the full names in the mile-marker table
 RIVER_CODE_MAP = {
     "LMR": "MISSISSIPPI-LO", "AHP": "MISSISSIPPI-LO", "UMR": "MISSISSIPPI-UP",
@@ -216,6 +239,60 @@ LOW_WATER_YEAR_LABELS = {
     2025: "October 20, 2025",
 }
 
+# Stage each gage read on that year's Memphis low-water date -- keep in sync with
+# update_bathym/make_combined_depth_polygons.py's LOW_WATER_YEARS (same duplication
+# pattern as GAGE_THRESHOLDS/LOW_WATER_YEAR_LABELS above: app.py doesn't import the
+# update_bathym module).
+LOW_WATER_SCENARIO_STAGES = {
+    2022: {"St. Louis": -2.25, "Memphis": -10.74, "Greenville": 5.95},
+    2023: {"St. Louis": 0.50, "Memphis": -11.97, "Greenville": 5.59},
+    2024: {"St. Louis": 0.71, "Memphis": -10.31, "Greenville": 5.92},
+    2025: {"St. Louis": -0.57, "Memphis": -8.83, "Greenville": 8.95},
+}
+
+# per-survey stage->width lookup tables from update_bathym/8_compute_width_by_stage.py
+# (one row per whole-foot stage tested at that survey's anchor gage) -- lets the
+# Current Conditions "Navigation Bottleneck" marker move to wherever the channel is
+# narrowest under the *selected* depth scenario, without recomputing anything: the
+# table already spans every stage worth asking about, so picking a scenario is just a
+# row lookup, and a new day's actual gage reading needs no recompute either, just a
+# lookup at that reading's rounded stage.
+WIDTH_BY_STAGE_DIR = Path("update_bathym/data/WidthByStage")
+_width_by_stage_cache = {}
+
+
+def _scenario_stage_ft(gage_name, depth_scenario):
+    """The river stage (ft) the selected depth-scenario-radio option represents at
+    `gage_name`. "current" tracks today's actual reading (same gage feed the CC gage
+    panel/river-depth layer use); a "20XXlowwater" value is that year's fixed
+    historical low-water stage (LOW_WATER_SCENARIO_STAGES)."""
+    if depth_scenario == "current":
+        readings = river_stage_df[river_stage_df["gage"] == gage_name]
+        if readings.empty:
+            return GAGE_THRESHOLDS[gage_name]
+        return float(readings.sort_values("date")["stage"].iloc[-1])
+    year = int(str(depth_scenario).replace("lowwater", ""))
+    return LOW_WATER_SCENARIO_STAGES[year][gage_name]
+
+
+def _width_at_stage(survey_id, stage_ft):
+    """(width_ft, bottleneck_lon, bottleneck_lat) for survey_id at the whole-foot
+    stage nearest `stage_ft`, from its precomputed width_by_stage.csv. Returns None if
+    that table doesn't exist -- the survey's raw NAVD88Files gpkg was already deleted
+    (by 9_make_depth_polygons.py) before 8_compute_width_by_stage.py could run on it --
+    or `stage_ft` falls outside the range that table tested."""
+    if survey_id not in _width_by_stage_cache:
+        path = WIDTH_BY_STAGE_DIR / f"{survey_id}_width_by_stage.csv"
+        _width_by_stage_cache[survey_id] = pd.read_csv(path) if path.exists() else None
+    table = _width_by_stage_cache[survey_id]
+    if table is None:
+        return None
+    row = table[table["stage_ft"] == round(stage_ft)]
+    if row.empty:
+        return None
+    row = row.iloc[0]
+    return float(row["width_ft"]), float(row["bottleneck_lon"]), float(row["bottleneck_lat"])
+
 
 def _ordinal(n):
     """11/12/13 -> 'th' regardless of last digit (11th, not 11st); everything else keys
@@ -235,7 +312,7 @@ def _low_water_scenario_option(year):
         "label": html.Div([
             html.Span(f"{year} Low Water", style={"display": "block"}),
             html.Span(
-                ["Occurred on ", html.B(month_day)],
+                html.B(month_day),
                 style={"font-size": "11px", "color": "#888", "display": "block", "font-weight": "normal"},
             ),
         ]),
@@ -767,7 +844,7 @@ def _load_depth_polygon_bins(poly_path_str):
     than these ~40m-buffered polygons need, which keeps the per-request trace payload
     smaller without any visible effect.
 
-    A raw single-survey file (see make_depth_polygons.py) stores an exact whole-foot
+    A raw single-survey file (see 9_make_depth_polygons.py) stores an exact whole-foot
     depth_bin at every point -- regroup + dissolve those into the same coarse
     DEPTH_POLY_COLORS display bands the combined "River Depth" layer uses, so one
     survey doesn't draw dozens of same-colored overlapping traces. A combined file (see
@@ -788,12 +865,12 @@ def _load_depth_polygon_bins(poly_path_str):
     return bins
 
 
-def _add_depth_polygon_traces(fig, poly_path):
-    """Add one filled Scattermap trace per depth-bin polygon in a survey's depth-polygon
-    geojson (see make_depth_polygons.py). Shared by the single clicked-survey overlay and
-    the "River Depth" layer, which draws every survey's polygons at once instead of just
-    the selected one."""
-    for bin_label, lons, lats in _load_depth_polygon_bins(str(poly_path)):
+def _add_depth_polygon_bin_traces(fig, bins):
+    """Add one filled Scattermap trace per (bin_label, lons, lats) depth-bin polygon.
+    Shared by every depth-polygon overlay -- the "River Depth" layer, the historic
+    low-water polygon layer, and (formerly) the single clicked-survey overlay -- so
+    they all render with identical styling."""
+    for bin_label, lons, lats in bins:
         color = DEPTH_POLY_COLORS.get(bin_label, "#888888")
         fig.add_trace(go.Scattermap(
             lon=lons,
@@ -813,6 +890,88 @@ def _add_depth_polygon_traces(fig, poly_path):
             hoverlabel=dict(bgcolor=color, bordercolor=color, font=dict(color="white")),
             showlegend=False,
         ))
+
+
+def _add_bottleneck_icon_markers(fig, icon_layers, lons, lats, widths):
+    """Add an invisible hoverable marker trace plus the "at-risk-icon" symbol layer at
+    each given point, hover-labeled with its navigable width. Shared by Current
+    Conditions' Navigation Bottleneck marker and Historic Conditions' narrow-width
+    points (see NARROW_WIDTHS_BY_YEAR) -- same icon, same hover treatment, different
+    source of points."""
+    lons, lats = list(lons), list(lats)
+    if not lons:
+        return
+    width_labels = [int(round(w)) for w in widths]
+    fig.add_trace(go.Scattermap(
+        lon=lons,
+        lat=lats,
+        mode="markers",
+        marker=dict(size=16, color="#e53935", opacity=0.0),
+        showlegend=False,
+        customdata=[[w] for w in width_labels],
+        hovertemplate="<b>Width: %{customdata[0]} ft</b><extra></extra>",
+    ))
+    icon_layers.append({
+        "sourcetype": "geojson",
+        "source": {
+            "type": "FeatureCollection",
+            "features": [
+                {"type": "Feature", "geometry": {"type": "Point", "coordinates": [lon, lat]}}
+                for lon, lat in zip(lons, lats)
+            ],
+        },
+        "type": "symbol",
+        "symbol": {"icon": "at-risk-icon", "iconsize": 2.5},
+    })
+
+
+def _add_depth_polygon_traces(fig, poly_path):
+    """Add one filled Scattermap trace per depth-bin polygon in a survey's depth-polygon
+    geojson (see 9_make_depth_polygons.py). Shared by the single clicked-survey overlay and
+    the "River Depth" layer, which draws every survey's polygons at once instead of just
+    the selected one."""
+    _add_depth_polygon_bin_traces(fig, _load_depth_polygon_bins(str(poly_path)))
+
+
+# Historic low-water depth polygons (2021+) -- one filled polygon per depth band per
+# year, built from that year's confirmed surveys and clipped to what the channel
+# actually looked like at that year's real lowest river stage. Unlike the "River
+# Depth" combined layer above (which always reflects the *current* year's surveys,
+# reshaped to any past low-water stage), these are locked to each year's own surveys.
+# Replaces individual survey dots on the Historic Conditions tab.
+_LOW_WATER_POLY_DIR = Path("DepthPolygons")
+_LOW_WATER_BIN_ORDER = {label: i for i, (_, _, label) in enumerate(_DISPLAY_BINS)}
+LOW_WATER_POLY_BY_YEAR = {}
+for _lwp_year in years:
+    _lwp_shp = _LOW_WATER_POLY_DIR / f"{_lwp_year}_low_water_polygon" / f"{_lwp_year}_low_water.shp"
+    if not _lwp_shp.exists():
+        continue
+    _lwp_gdf = gpd.read_file(_lwp_shp).to_crs(4326)
+    # the shapefile's string field stores missing values as the literal text "nan"
+    # (dbf strings have no real null), not an actual NaN -- .notna() alone won't drop it
+    _lwp_gdf = _lwp_gdf[_lwp_gdf["depth_rang"].notna() & (_lwp_gdf["depth_rang"] != "nan")].copy()
+    _lwp_gdf["depth_bin"] = _lwp_gdf["depth_rang"] + " ft"
+    _lwp_gdf["bin_order"] = _lwp_gdf["depth_bin"].map(_LOW_WATER_BIN_ORDER)
+    _lwp_gdf = _lwp_gdf.sort_values("bin_order")
+    _lwp_bins = []
+    for _, _lwp_row in _lwp_gdf.iterrows():
+        _lwp_lons, _lwp_lats = _geom_to_lonlat(_lwp_row.geometry)
+        _lwp_lons = [round(v, 6) if v is not None else None for v in _lwp_lons]
+        _lwp_lats = [round(v, 6) if v is not None else None for v in _lwp_lats]
+        _lwp_bins.append((_lwp_row["depth_bin"], _lwp_lons, _lwp_lats))
+    LOW_WATER_POLY_BY_YEAR[_lwp_year] = _lwp_bins
+
+
+# Historic narrow-width points (2021+) -- one point per constraining spot along that
+# year's low-water channel (already identified as narrow, not re-filtered here), with
+# the continuous navigable width measured there. Shown on Historic Conditions with the
+# same "at-risk-icon" marker as Current Conditions' Navigation Bottleneck.
+NARROW_WIDTHS_BY_YEAR = {}
+for _nw_year in years:
+    _nw_csv = _LOW_WATER_POLY_DIR / f"{_nw_year}_narrow_widths.csv"
+    if not _nw_csv.exists():
+        continue
+    NARROW_WIDTHS_BY_YEAR[_nw_year] = pd.read_csv(_nw_csv)
 
 
 # AIS-derived dredge activity (2021-2024) -- distinct from the manually logged USACE
@@ -873,53 +1032,6 @@ GAGE_DETAIL_VISIBLE = {
     "width": "340px", "background": "rgba(255,255,255,0.97)",
     "padding": "16px 18px 12px 18px", "border-radius": "8px",
     "box-shadow": "0 2px 10px rgba(0,0,0,0.4)",
-    "font-family": "Arial, sans-serif",
-}
-SURVEY_LEGEND_HIDDEN = {"display": "none"}
-SURVEY_LEGEND_VISIBLE = {
-    "width": "260px", "background": "rgba(255,255,255,0.97)",
-    "padding": "14px 16px", "border-radius": "8px",
-    "box-shadow": "0 2px 10px rgba(0,0,0,0.4)",
-    "font-family": "Arial, sans-serif",
-}
-GAGE_FREQ_LINK_HIDDEN = {"display": "none"}
-GAGE_FREQ_LINK_VISIBLE = {
-    "border": "none", "background": "none", "cursor": "pointer", "padding": "0",
-    "color": "#1a237e", "text-decoration": "underline", "font-size": "12px",
-    "margin-top": "10px", "display": "block", "text-align": "left",
-}
-CURRENT_GAGE_HIDDEN = {"display": "none"}
-CURRENT_GAGE_VISIBLE = {
-    "width": "200px", "background": "rgba(255,255,255,0.97)",
-    "padding": "10px 14px", "border-radius": "8px",
-    "box-shadow": "0 2px 10px rgba(0,0,0,0.4)",
-    "font-family": "Arial, sans-serif",
-}
-ZOOM_MEMO_HIDDEN = {"display": "none"}
-ZOOM_MEMO_VISIBLE = {
-    "width": "200px", "background": "rgba(255,255,255,0.9)",
-    "padding": "8px 14px", "border-radius": "8px",
-    "font-family": "Arial, sans-serif", "font-size": "11px",
-    "font-style": "italic", "color": "#777", "line-height": "1.35",
-}
-SURVEY_BANNER_HIDDEN = {"display": "none"}
-SURVEY_BANNER_VISIBLE = {
-    "position": "relative", "width": "max-content", "max-width": "420px",
-    "background": "rgba(255,255,255,0.97)",
-    "padding": "10px 26px 10px 14px", "border-radius": "8px",
-    "box-shadow": "0 2px 10px rgba(0,0,0,0.4)",
-    "font-family": "Arial, sans-serif",
-}
-# gage-frequency panel — floats above the bottom of the map like the other detail
-# panels, stopping short of the survey legend column (260px legend + 15px margin
-# + a little breathing room)
-GAGE_FREQ_HIDDEN = {"display": "none"}
-GAGE_FREQ_VISIBLE = {
-    "position": "absolute", "bottom": "15px", "left": "15px", "right": "330px",
-    "zIndex": "24", "background": "rgba(255,255,255,0.97)",
-    "border-radius": "8px",
-    "box-shadow": "0 2px 10px rgba(0,0,0,0.4)",
-    "padding": "10px 40px 6px 14px",
     "font-family": "Arial, sans-serif",
 }
 # Welcome intro modal -- shown over the map on first load, dismissed with the ✕ and
@@ -1430,56 +1542,76 @@ FULL_LAYER_OPTIONS = [
     {
         "label": html.Span([
             html.Div([
-                html.Span("Riverbed Surveys", style={"font-size": "16px"}),
-                _layer_info_icon(
-                    "U.S. Army Corps of Engineers eHydro",
-                    [
-                        html.Span(
-                            "Hydrographic surveys (“riverbed surveys”) "
-                            "measure the elevation of the riverbed. We analyze "
-                            "each survey to estimate how shallow the channel "
-                            "could get at that location if the river dropped "
-                            "to a historic low-water stage.",
-                            style={"display": "block", "margin-bottom": "6px"},
-                        ),
-                        html.Span([
-                            html.Span("High risk: ", style={"font-weight": "bold"}),
-                            "a 9-ft-deep path may not exist across the channel, "
-                            "so barge traffic is likely to be disrupted under "
-                            "low water conditions.",
-                        ], style={"display": "block", "margin-bottom": "4px"}),
-                        html.Span([
-                            html.Span("Medium risk: ", style={"font-weight": "bold"}),
-                            "a 9-ft-deep path should exist, but it may be "
-                            "narrow or prone to shoaling.",
-                        ], style={"display": "block", "margin-bottom": "4px"}),
-                        html.Span([
-                            html.Span("Low risk: ", style={"font-weight": "bold"}),
-                            "no barge navigation issues expected, even under "
-                            "low water.",
-                        ], style={"display": "block"}),
-                    ],
-                    wide=True,
-                ),
                 html.Div(
-                    "Navigation Risk under Low Water:",
-                    style={"font-size": "13px", "display": "block", "width": "100%"}
-                ),
-                html.Div(
-                    style={"display": "flex", "gap": "10px", "margin-top": "5px", "margin-left": "4px"},
+                    style={"display": "flex", "align-items": "center", "gap": "6px"},
                     children=[
-                        html.Div([
-                            html.Div(style={"width": "12px", "height": "12px", "border-radius": "50%", "background": RISK_BINS[0][1], "display": "inline-block", "margin-right": "4px", "vertical-align": "middle"}),
-                            html.Span("Low", style={"font-size": "13px", "vertical-align": "middle"}),
-                        ]),
-                        html.Div([
-                            html.Div(style={"width": "12px", "height": "12px", "border-radius": "50%", "background": RISK_BINS[1][1], "display": "inline-block", "margin-right": "4px", "vertical-align": "middle"}),
-                            html.Span("Medium", style={"font-size": "13px", "vertical-align": "middle"}),
-                        ]),
-                        html.Div([
-                            html.Img(src="/assets/at_risk_marker.png", height="16", style={"display": "inline-block", "margin-right": "4px", "vertical-align": "middle"}),
-                            html.Span("High", style={"font-size": "13px", "vertical-align": "middle"}),
-                        ]),
+                        html.Div(style={
+                            "display": "inline-block", "flex-shrink": "0",
+                            "width": "22px", "height": "14px",
+                            "border-radius": "2px",
+                            "background": f"linear-gradient(to right, {', '.join(DEPTH_POLY_COLORS.values())})",
+                        }),
+                        html.Span("River Depth", style={"font-size": "14px", "font-weight": "bold"}),
+                        _layer_info_icon(
+                            "U.S. Army Corps of Engineers eHydro",
+                            [
+                                html.Span(
+                                    "Hydrographic surveys (“riverbed surveys”) "
+                                    "measure the elevation of the riverbed. We combine "
+                                    "every confirmed survey from the selected year to "
+                                    "estimate how shallow the channel actually got that "
+                                    "year, at that year's real lowest river stage.",
+                                    style={"display": "block", "margin-bottom": "6px"},
+                                ),
+                                html.Span(
+                                    "Shaded from deep (blue) to shallow (red) -- see "
+                                    "the color key below.",
+                                    style={"display": "block", "margin-bottom": "6px"},
+                                ),
+                                html.Span(
+                                    "Constraining points along that year's channel are also "
+                                    "marked: the warning icon is Not Navigable (continuous "
+                                    "9ft-deep water narrower than 300ft, same as Current "
+                                    "Conditions), the orange dot Reduced Navigability (300-800ft "
+                                    "wide).",
+                                    style={"display": "block"},
+                                ),
+                            ],
+                            wide=True,
+                        ),
+                    ],
+                ),
+                html.Span(
+                    "At lowest water level of selected year",
+                    style={"font-size": "11px", "color": "#666", "display": "block", "font-weight": "normal"}
+                ),
+                html.Div(
+                    "Constraining Points:",
+                    style={"font-size": "13px", "font-weight": "bold", "display": "block", "width": "100%", "margin-top": "8px"}
+                ),
+                html.Div(
+                    style={"display": "flex", "flex-direction": "column", "gap": "4px", "margin-top": "5px", "margin-left": "4px"},
+                    children=[
+                        html.Div(
+                            style={"display": "flex", "align-items": "flex-start", "gap": "6px"},
+                            children=[
+                                html.Img(src="/assets/at_risk_marker.png", height="16", style={"margin-top": "1px", "flex-shrink": "0"}),
+                                html.Div([
+                                    html.Span("Not Navigable", style={"font-size": "13px", "display": "block"}),
+                                    html.Span("9ft channel is less than 300ft wide", style={"font-size": "11px", "color": "#666", "display": "block"}),
+                                ]),
+                            ],
+                        ),
+                        html.Div(
+                            style={"display": "flex", "align-items": "flex-start", "gap": "6px"},
+                            children=[
+                                html.Div(style={"width": "12px", "height": "12px", "border-radius": "50%", "background": "#fb8c00", "margin-top": "3px", "flex-shrink": "0"}),
+                                html.Div([
+                                    html.Span("Reduced Navigability", style={"font-size": "13px", "display": "block"}),
+                                    html.Span("9ft channel is 300-800ft wide", style={"font-size": "11px", "color": "#666", "display": "block"}),
+                                ]),
+                            ],
+                        ),
                     ]
                 ),
             ])
@@ -1489,7 +1621,7 @@ FULL_LAYER_OPTIONS = [
     {
         "label": html.Span([
             html.Img(src="/assets/raindrop.png", height="22", style={"vertical-align": "middle", "margin-right": "5px"}),
-            "Stream Gage",
+            html.Span("Stream Gage", style={"font-weight": "bold"}),
             _layer_info_icon(
                 "USGS / NOAA-NWS",
                 [
@@ -1512,7 +1644,7 @@ FULL_LAYER_OPTIONS = [
     {
         "label": html.Span([
             html.Img(src="/assets/dredge_marker.png", height="22", style={"vertical-align": "middle", "margin-right": "5px"}),
-            "Dredging",
+            html.Span("Dredging", style={"font-weight": "bold"}),
             _layer_info_icon(
                 [
                     "U.S. Coast Guard Broadcast Notice to Mariners (2026)",
@@ -1543,7 +1675,7 @@ FULL_LAYER_OPTIONS = [
     {
         "label": html.Span([
             html.Img(src="/assets/shoaling_marker.png", height="22", style={"vertical-align": "middle", "margin-right": "5px"}),
-            "Shoaling",
+            html.Span("Shoaling", style={"font-weight": "bold"}),
             _layer_info_icon(
                 "U.S. Coast Guard Broadcast Notice to Mariners",
                 "Reports of shoaling (sediment buildup on the riverbed) "
@@ -1553,43 +1685,8 @@ FULL_LAYER_OPTIONS = [
         ]),
         "value": "shoaling",
     },
-    {
-        "label": html.Span([
-            html.Div(style={
-                "display": "inline-block",
-                "width": "22px", "height": "4px",
-                "background": CATEGORY_COLORS["draft"],
-                "vertical-align": "middle",
-                "margin-right": "5px",
-                "border-radius": "2px",
-            }),
-            "Draft Restriction",
-            _layer_info_icon(
-                "U.S. Coast Guard Broadcast Notice to Mariners",
-                [
-                    html.Span(
-                        "The USCG imposes draft restrictions when water "
-                        "levels drop to critical lows.",
-                        style={"display": "block", "margin-bottom": "6px"},
-                    ),
-                    html.Span(
-                        "A barge's draft is how far it sits below the "
-                        "waterline. The deeper the draft, the greater the "
-                        "risk of grounding in shallow water.",
-                        style={"display": "block", "margin-bottom": "6px"},
-                    ),
-                    html.Span(
-                        "Operators reduce draft by loading less cargo.",
-                        style={"display": "block"},
-                    ),
-                ],
-                wide=True,
-            ),
-        ]),
-        "value": "draft",
-    },
 ]
-FULL_LAYER_LABEL_STYLE = {"display": "flex", "align-items": "center", "margin-bottom": "5px", "font-size": "16px"}
+FULL_LAYER_LABEL_STYLE = {"display": "flex", "align-items": "center", "margin-bottom": "5px", "font-size": "14px"}
 FULL_LAYER_INPUT_STYLE = {"margin-right": "6px"}
 
 
@@ -1605,7 +1702,7 @@ def _cc_legend_row(icon, main_line, sub_line, tooltip_source, tooltip_descriptio
         html.Div(
             style={"display": "flex", "align-items": "center", "gap": "4px"},
             children=[
-                html.Span(main_line, style={"font-size": "16px"}),
+                html.Span(main_line, style={"font-size": "14px", "font-weight": "bold"}),
                 _layer_info_icon(tooltip_source, tooltip_description, wide=tooltip_wide),
             ]
         ),
@@ -1622,6 +1719,72 @@ def _cc_legend_row(icon, main_line, sub_line, tooltip_source, tooltip_descriptio
 
 # Restricted 3-layer legend, shown on the "Current Conditions" tab
 CC_LAYER_OPTIONS = [
+    {
+        "label": html.Div([
+            _cc_legend_row(
+                html.Div(style={
+                    "display": "inline-block",
+                    "width": "22px", "height": "14px", "margin-top": "1px",
+                    "background": f"linear-gradient(to right, {', '.join(DEPTH_POLY_COLORS.values())})",
+                    "border-radius": "2px",
+                }),
+                "River Depth",
+                None,
+                "U.S. Army Corps of Engineers eHydro",
+                [
+                    html.Span(
+                        "Estimated riverbed depth at every confirmed survey "
+                        "location, shaded from deep (blue) to shallow (red). "
+                        "Shown for today's actual river stage by default -- use "
+                        "the \"River Depth Scenarios\" box below the legend to "
+                        "see it under a historic low-water stage instead.",
+                        style={"display": "block", "margin-bottom": "6px"},
+                    ),
+                    html.Span(
+                        "Constraining points are also marked: the warning icon is "
+                        "Not Navigable (continuous 9ft-deep water narrower than "
+                        "300ft), the orange dot Reduced Navigability (300-800ft "
+                        "wide).",
+                        style={"display": "block"},
+                    ),
+                ],
+            ),
+            html.Span(
+                "Zoom in to see depth at locations surveyed this season",
+                style={"font-size": "11px", "color": "#666", "display": "block", "font-weight": "normal"}
+            ),
+            html.Div(
+                "Constraining Points:",
+                style={"font-size": "13px", "font-weight": "bold", "display": "block", "width": "100%", "margin-top": "8px"}
+            ),
+            html.Div(
+                style={"display": "flex", "flex-direction": "column", "gap": "4px", "margin-top": "5px", "margin-left": "4px"},
+                children=[
+                    html.Div(
+                        style={"display": "flex", "align-items": "flex-start", "gap": "6px"},
+                        children=[
+                            html.Img(src="/assets/at_risk_marker.png", height="16", style={"margin-top": "1px", "flex-shrink": "0"}),
+                            html.Div([
+                                html.Span("Not Navigable", style={"font-size": "13px", "display": "block"}),
+                                html.Span("9ft channel is less than 300ft wide", style={"font-size": "11px", "color": "#666", "display": "block"}),
+                            ]),
+                        ],
+                    ),
+                    html.Div(
+                        style={"display": "flex", "align-items": "flex-start", "gap": "6px"},
+                        children=[
+                            html.Div(style={"width": "12px", "height": "12px", "border-radius": "50%", "background": "#fb8c00", "margin-top": "3px", "flex-shrink": "0"}),
+                            html.Div([
+                                html.Span("Reduced Navigability", style={"font-size": "13px", "display": "block"}),
+                                html.Span("9ft channel is 300-800ft wide", style={"font-size": "11px", "color": "#666", "display": "block"}),
+                            ]),
+                        ],
+                    ),
+                ]
+            ),
+        ]),
+        "value": "river_depth",
+    },
     {
         "label": _cc_legend_row(
             html.Img(src="/assets/dredge_marker.png", height="22", style={"margin-top": "1px"}),
@@ -1693,25 +1856,6 @@ CC_LAYER_OPTIONS = [
     },
     {
         "label": _cc_legend_row(
-            html.Div(style={
-                "display": "inline-block",
-                "width": "22px", "height": "14px", "margin-top": "1px",
-                "background": f"linear-gradient(to right, {', '.join(DEPTH_POLY_COLORS.values())})",
-                "border-radius": "2px",
-            }),
-            "River Depth",
-            ["(zoom in to see depth at locations", html.Br(), "surveyed this season)"],
-            "U.S. Army Corps of Engineers eHydro",
-            "Estimated riverbed depth at every confirmed survey "
-            "location, shaded from deep (blue) to shallow (red). "
-            "Shown for today's actual river stage by default -- use "
-            "the \"River Depth Scenarios\" box below the legend to "
-            "see it under a historic low-water stage instead.",
-        ),
-        "value": "river_depth",
-    },
-    {
-        "label": _cc_legend_row(
             html.Img(src="/assets/raindrop.png", height="22", style={"margin-top": "1px"}),
             "Stream Gage", None,
             "USGS / NOAA-NWS",
@@ -1731,8 +1875,8 @@ CC_LAYER_OPTIONS = [
         "value": "stage",
     },
 ]
-CC_LAYER_VALUE = ["dredging", "shoaling", "draft", "stage", "river_depth"]
-CC_LAYER_LABEL_STYLE = {"display": "flex", "align-items": "flex-start", "margin-bottom": "3px", "font-size": "16px"}
+CC_LAYER_VALUE = ["river_depth", "dredging", "shoaling", "draft", "stage"]
+CC_LAYER_LABEL_STYLE = {"display": "flex", "align-items": "flex-start", "margin-bottom": "3px", "font-size": "14px"}
 CC_LAYER_INPUT_STYLE = {"margin-right": "6px", "margin-top": "3px"}
 
 
@@ -1775,9 +1919,7 @@ app.layout = html.Div(
 
         dcc.Store(id="active-panel-store", data=None),
         dcc.Store(id="notice-detail-store", data=None),
-        dcc.Store(id="selected-survey-store", data=None),
         dcc.Store(id="selected-gage-store", data=None),
-        dcc.Store(id="gage-freq-store", data=None),
         dcc.Store(id="selected-shoaling-mile-store", data=None),
         # True on the new "Current Conditions" landing page, False on "Riverbed Surveys" --
         # both nav tabs share the same map/controls DOM, this just switches which subset
@@ -1883,69 +2025,6 @@ app.layout = html.Div(
                     ]
                 ),
 
-                # Survey depth banner + legend — stacked top-right, banner directly
-                # above the legend so its close button (which dismisses both) reads
-                # as belonging to the pair instead of sitting far away from the legend
-                html.Div(
-                    id="survey-panels-stack",
-                    style={
-                        "position": "absolute", "top": "15px", "right": "15px", "zIndex": "25",
-                        "display": "flex", "flex-direction": "column", "align-items": "flex-end",
-                        "gap": "10px",
-                    },
-                    children=[
-
-                        # Survey depth overlay banner — appears when a survey dot is clicked
-                        html.Div(
-                            id="survey-detail-banner",
-                            style={"display": "none"},
-                            children=[
-                                html.Button(
-                                    "✕",
-                                    id="survey-detail-close",
-                                    style={
-                                        "position": "absolute", "top": "6px", "right": "8px",
-                                        "border": "none", "background": "none", "cursor": "pointer",
-                                        "font-size": "14px", "font-weight": "bold", "color": "#333",
-                                        "line-height": "1", "padding": "2px",
-                                    }
-                                ),
-                                html.Div(id="survey-detail-label"),
-                            ]
-                        ),
-
-                        # Survey depth legend — appears below the banner when a survey map is shown.
-                        # gage-freq-link is a static, permanent component (not part of
-                        # survey-legend-content's dynamically-replaced children) -- Dash fires a
-                        # component's n_clicks-tracking callback on first mount, so recreating this
-                        # button fresh on every survey selection made it look "clicked" immediately
-                        html.Div(
-                            id="survey-legend-box",
-                            style={"display": "none"},
-                            children=[
-                                html.Div(id="survey-legend-content"),
-                                html.Button("", id="gage-freq-link", n_clicks=0, style={"display": "none"}),
-                            ]
-                        ),
-
-                        # Current gage reading — appears below the legend when a survey dot is
-                        # clicked, showing the most recent stage reading for whichever gage that
-                        # survey's depth legend is anchored to
-                        html.Div(
-                            id="current-gage-box",
-                            style={"display": "none"},
-                        ),
-
-                        # Reminder that the depth-legend map only renders once zoomed in far
-                        # enough on the selected survey point -- shown alongside the current
-                        # gage reading so it's visible right when someone clicks a survey dot
-                        html.Div(
-                            id="survey-zoom-memo",
-                            style={"display": "none"},
-                        ),
-                    ]
-                ),
-
                 # River stage detail panel — appears when a gage dot is clicked
                 html.Div(
                     id="gage-detail-box",
@@ -1964,25 +2043,6 @@ app.layout = html.Div(
                             type="circle",
                             children=dcc.Graph(id="gage-stage-plot", style={"height": "260px"}, config={"displayModeBar": False}),
                         ),
-                    ]
-                ),
-
-                # Gage-frequency panel — appears across the bottom of the map when the
-                # "how often does the gage reach X ft?" link is clicked from a survey's
-                # depth legend
-                html.Div(
-                    id="gage-freq-panel",
-                    style=GAGE_FREQ_HIDDEN,
-                    children=[
-                        html.Button(
-                            "✕", id="gage-freq-close",
-                            style={
-                                "position": "absolute", "top": "8px", "right": "10px",
-                                "border": "none", "background": "none", "cursor": "pointer",
-                                "font-size": "16px", "color": "#888",
-                            }
-                        ),
-                        dcc.Graph(id="gage-freq-graph", style={"height": "240px"}, config={"displayModeBar": False}),
                     ]
                 ),
 
@@ -2069,11 +2129,13 @@ app.layout = html.Div(
 
                         # River depth scenario toggle -- CC-only and only when the River
                         # Depth layer itself is checked (see sync_depth_scenario_visibility),
-                        # same card style + width as map-controls above so it reads as a
-                        # second box stacked directly beneath the legend.
+                        # same card style as map-controls above so it reads as a second box
+                        # stacked directly beneath the legend, but wider so the "20XX Low
+                        # Water" / "Occurred on <date>" option labels fit on one line each
+                        # instead of wrapping and stretching the box tall.
                         html.Div(
                             id="depth-scenario-wrapper",
-                            style={"width": "240px", "display": "none"},
+                            style={"width": "340px", "display": "none"},
                             children=[
                                 html.Div(
                                     style={
@@ -2108,7 +2170,7 @@ app.layout = html.Div(
                                                 html.P(
                                                     "Check out river depths under different water "
                                                     "level conditions",
-                                                    style={"font-size": "13px", "color": "#666", "margin": "8px 0 8px 0"},
+                                                    style={"font-size": "11px", "color": "#666", "margin": "8px 0 8px 0"},
                                                 ),
                                                 dcc.RadioItems(
                                                     id="depth-scenario-radio",
@@ -2120,6 +2182,13 @@ app.layout = html.Div(
                                                     value="current",
                                                     inputStyle={"margin-right": "6px"},
                                                     labelStyle={"display": "flex", "align-items": "flex-start", "margin-bottom": "4px", "font-size": "13px"},
+                                                    style={
+                                                        "display": "grid",
+                                                        "grid-template-columns": "1fr 1fr",
+                                                        "grid-template-rows": "repeat(3, auto)",
+                                                        "grid-auto-flow": "column",
+                                                        "column-gap": "12px",
+                                                    },
                                                 ),
                                             ],
                                         ),
@@ -2549,7 +2618,7 @@ def sync_cc_mode_controls(cc_mode):
 )
 def sync_depth_scenario_visibility(cc_mode, layers_cc):
     show = bool(cc_mode) and "river_depth" in (layers_cc or [])
-    return {"width": "240px", "display": "block" if show else "none"}
+    return {"width": "340px", "display": "block" if show else "none"}
 
 
 @app.callback(
@@ -2603,12 +2672,16 @@ def update_compare_years_barge_rate(click_data):
     Input("year-slider", "value"),
     Input("layer-toggle-cc", "value"),
     Input("layer-toggle-full", "value"),
-    Input("selected-survey-store", "data"),
     Input("selected-shoaling-mile-store", "data"),
     Input("cc-mode-store", "data"),
     Input("depth-scenario-radio", "value"),
 )
-def update_map(year, layers_cc, layers_full, selected_survey, selected_shoaling_mile, cc_mode, depth_scenario):
+def update_map(year, layers_cc, layers_full, selected_shoaling_mile, cc_mode, depth_scenario):
+    # year-slider's value is itself set by sync_cc_mode_controls (keyed off cc-mode-store),
+    # so on initial page load this callback can fire before that resolves, with year still
+    # None -- fall back to the same default that callback would have set.
+    if year is None:
+        year = thisyear if cc_mode else DEFAULT_HISTORIC_YEAR
     layers = layers_cc if cc_mode else layers_full
 
     fig = go.Figure()
@@ -2616,21 +2689,9 @@ def update_map(year, layers_cc, layers_full, selected_survey, selected_shoaling_
     # UM (Upper Mississippi) survey dots, north of Cairo, are only shown for 2026 onward
     if year < 2026:
         df_b = df_b[~df_b["survey_id"].str.startswith("UM")]
-    # only show surveys that have a depth-polygon file -- clicking a dot with none does
-    # nothing (see handle_survey_click), which reads as broken, so don't plot it at all
+    # only consider surveys that have a depth-polygon file -- used below by Current
+    # Conditions' Navigation Bottleneck marker
     df_b = df_b[df_b["survey_id"].isin(DEPTH_POLY_FILES)]
-    # hide the dot for whichever survey is currently showing its polygon overlay, but if it's
-    # High risk, keep its marker up (faded) at the problem point so it's not lost under the
-    # polygon -- only High needs this since its marker is otherwise invisible (opacity 0) with
-    # only the icon_layers overlay representing it, which is also excluded once df_b drops sid.
-    # Low/Medium use plain opacity-1 dot markers, so hiding them under the polygon is fine as-is.
-    selected_at_risk_row = None
-    if selected_survey:
-        sid = selected_survey.get("survey_id")
-        df_b = df_b[df_b["survey_id"] != sid]
-        match = bathy[(bathy["survey_id"] == sid) & (bathy["at_risk_eff"] == "high")]
-        if not match.empty:
-            selected_at_risk_row = match.iloc[0]
     df_n = notices[notices['year']==year]
     # plot river
     fig.add_trace(
@@ -2726,90 +2787,118 @@ def update_map(year, layers_cc, layers_full, selected_survey, selected_shoaling_
 
     icon_layers = []
 
-    #  bathym layer - 3 risk bins (at_risk low/medium/high), each its own trace so color/legend
-    # are discrete. drawn here (before dredging/shoaling/other) so it sits behind them on the
-    # map, but legendrank pushes it below them in the legend regardless of draw order
-    if "bathy" in layers:
-        risk_masks = {
-            "Low Risk": df_b["at_risk_eff"] == "low",
-            "Medium Risk": df_b["at_risk_eff"] == "medium",
-            "High Risk": df_b["at_risk_eff"] == "high",
-        }
-        for label, color, size in RISK_BINS:
-            df_bin = df_b[risk_masks[label]].copy()
-            if df_bin.empty:
-                continue
-            df_bin["date_fmt"] = pd.to_datetime(df_bin["date"]).dt.strftime("%B %-d, %Y")
-            df_bin["click_hint"] = df_bin["survey_id"].apply(
-                lambda sid: "<i>Click for depth map and details</i>" if sid in DEPTH_POLY_FILES else ""
-            )
-            # thresholds south of the Arkansas River confluence (~mile 580) are anchored
-            # to Greenville = 7ft instead of Memphis -- see threshold calculation/
-            # calculate_lowwater_thresh_datums.py's GREENVILLE_TARGET/CONFLUENCE_MILE
-            def _gage_info(m):
-                if m >= 951:
-                    return "St. Louis", -3, "St. Louis gage is at -3ft"
-                if m >= 580:
-                    return "Memphis", -10, "Memphis gage is at -10ft"
-                return "Greenville", 7, "Greenville gage is at 7ft"
-            gage_info = df_bin["milemarker"].apply(_gage_info)
-            df_bin["gage_name"] = gage_info.apply(lambda t: t[0])
-            df_bin["gage_value"] = gage_info.apply(lambda t: t[1])
-            df_bin["gage_label"] = gage_info.apply(lambda t: t[2])
-            df_bin["gage_uncertainty"] = df_bin["milemarker"].apply(_uncertainty_for_mile)
-            custom = df_bin[["date_fmt", "depth", "survey_id", "click_hint", "gage_label", "gage_name", "gage_value", "gage_uncertainty"]].copy()
-            custom.insert(0, "_type", "bathy")
-            is_high_risk = label == "High Risk"
-            fig.add_trace(
-                go.Scattermap(
-                    lon=df_bin["LON"],
-                    lat=df_bin["LAT"],
-                    mode="markers",
-                    marker=dict(size=size, color=color, opacity=0.0 if is_high_risk else 1.0),
-                    showlegend=True,
-                    legendgroup="depth_survey",
-                    legendgrouptitle_text="Survey Locations:<br>Navigation Risk under Low Water",
-                    legendrank=10,
-                    customdata=custom.values,
-                    name=label,
-                    hovertemplate=(
-                        "<b><span style='font-size:16px'>Riverbed Survey</span></b><br>"
-                        "<span style='font-size:14px'>%{customdata[1]}</span><br>"
-                        "%{customdata[4]}<extra></extra>"
-                    )
-                )
-            )
-            if is_high_risk:
-                icon_layers.append({
-                    "sourcetype": "geojson",
-                    "source": {
-                        "type": "FeatureCollection",
-                        "features": [
-                            {"type": "Feature",
-                             "geometry": {"type": "Point", "coordinates": [row["LON"], row["LAT"]]}}
-                            for _, row in df_bin.iterrows()
-                        ],
-                    },
-                    "type": "symbol",
-                    "symbol": {"icon": "at-risk-icon", "iconsize": 2.5},
-                })
+    # river depth layer -- draws one precomputed polygon per depth bin for the whole
+    # year, combining every confirmed survey (see
+    # update_bathym/make_combined_depth_polygons.py: newer surveys' polygons win over
+    # older ones wherever they overlap). Not built live -- the daily pipeline
+    # regenerates every scenario file every morning (and after a survey is
+    # confirmed/reviewed). "current" (default) is shifted to today's actual river stage;
+    # "20XXlowwater" is shifted to the stage each gage read on that year's lowest Memphis
+    # reading (LOW_WATER_YEARS) -- all only ever produced for the current year's surveys,
+    # see the depth-scenario-radio control. Drawn before the constraining-point markers
+    # below so those markers sit on top of the depth fill instead of getting covered by it.
+    if "river_depth" in layers:
+        suffix = "" if depth_scenario == "current" else f"_{depth_scenario}"
+        combined_path = _DEPTH_POLY_DIR / f"{year}_combined_depth_polygons{suffix}.geojson"
+        if combined_path.exists():
+            _add_depth_polygon_traces(fig, combined_path)
 
-    if selected_at_risk_row is not None:
-        icon_layers.append({
-            "sourcetype": "geojson",
-            "source": {
-                "type": "FeatureCollection",
-                "features": [{
-                    "type": "Feature",
-                    "geometry": {
-                        "type": "Point",
-                        "coordinates": [selected_at_risk_row["LON"], selected_at_risk_row["LAT"]],
-                    },
-                }],
-            },
-            "type": "symbol",
-            "symbol": {"icon": "at-risk-icon-selected", "iconsize": 2.5},
-        })
+    #  bathym layer - drawn here (before dredging/shoaling/other) so it sits behind them
+    # on the map, but legendrank pushes it below them in the legend regardless of draw
+    # order. Current Conditions has no separate "bottleneck" checkbox -- constraining
+    # points are part of the "River Depth" layer, same as Historic Conditions.
+    if cc_mode and "river_depth" in layers:
+        # thresholds south of the Arkansas River confluence (~mile 580) are anchored
+        # to Greenville = 7ft instead of Memphis -- see threshold calculation/
+        # calculate_lowwater_thresh_datums.py's GREENVILLE_TARGET/CONFLUENCE_MILE
+        def _gage_info(m):
+            if m >= 951:
+                return "St. Louis", -3, "St. Louis gage is at -3ft"
+            if m >= 580:
+                return "Memphis", -10, "Memphis gage is at -10ft"
+            return "Greenville", 7, "Greenville gage is at 7ft"
+
+        # Current Conditions: the constraining-point markers' location and width are
+        # specific to the selected depth scenario -- looked up from each survey's
+        # precomputed stage->width table (8_compute_width_by_stage.py) rather than the
+        # fixed-threshold vessel_path_bottleneck_lon/lat columns (it has no scenario
+        # selector, so its markers are always "at this survey's own anchor-gage
+        # threshold"). These markers' hover just states the width -- they don't open a
+        # detail panel.
+        df_cc = df_b.copy()
+        gage_info = df_cc["milemarker"].apply(_gage_info)
+        df_cc["gage_name"] = gage_info.apply(lambda t: t[0])
+        stages = df_cc["gage_name"].apply(lambda g: _scenario_stage_ft(g, depth_scenario))
+        lookups = [
+            _width_at_stage(sid, stage) for sid, stage in zip(df_cc["survey_id"], stages)
+        ]
+        found = [lk is not None for lk in lookups]
+        df_cc["width_ft_scenario"] = [
+            lk[0] if lk is not None else np.nan for lk in lookups
+        ]
+        df_cc.loc[found, "LON"] = [lk[1] for lk, ok in zip(lookups, found) if ok]
+        df_cc.loc[found, "LAT"] = [lk[2] for lk, ok in zip(lookups, found) if ok]
+        # surveys whose raw gpkg was already gone before 8_compute_width_by_stage.py
+        # could build their table -- fall back to the static single-threshold value
+        # (LON/LAT for these already point at vessel_path_bottleneck_lon/lat, set
+        # up above where bathy["LON"]/["LAT"] are first built)
+        missing = ~np.array(found)
+        static_width = pd.to_numeric(df_cc.loc[missing, "vessel_path_width_ft"], errors="coerce")
+        # a fully broken path (no continuous 9ft-deep route at all) reads as "high
+        # risk" regardless of its stored through_width_ft -- see _risk_from_vessel_path
+        # -- so show it as a 0ft bottleneck rather than whatever partial width was
+        # stored for the disconnected pieces
+        not_connected = df_cc.loc[missing, "vessel_path_connected"].astype(str).str.lower() == "no"
+        df_cc.loc[missing, "width_ft_scenario"] = static_width.where(~not_connected, 0.0)
+        # same two tiers as Historic Conditions' constraining points: Not Navigable
+        # (warning icon) under 300ft, Reduced Navigability (orange dot) 300-800ft;
+        # 800ft+ is fully navigable and gets no marker.
+        is_not_navigable = df_cc["width_ft_scenario"] < NAVIGABLE_WIDTH_HIGH_FT
+        is_reduced = (df_cc["width_ft_scenario"] >= NAVIGABLE_WIDTH_HIGH_FT) & (df_cc["width_ft_scenario"] < NAVIGABLE_WIDTH_LOW_FT)
+        df_not_navigable = df_cc[is_not_navigable]
+        df_reduced = df_cc[is_reduced]
+        _add_bottleneck_icon_markers(
+            fig, icon_layers,
+            df_not_navigable["LON"], df_not_navigable["LAT"], df_not_navigable["width_ft_scenario"],
+        )
+        if not df_reduced.empty:
+            fig.add_trace(go.Scattermap(
+                lon=df_reduced["LON"],
+                lat=df_reduced["LAT"],
+                mode="markers",
+                marker=dict(size=12, color="#fb8c00"),
+                showlegend=False,
+                customdata=df_reduced[["width_ft_scenario"]].round().astype(int).values,
+                hovertemplate="<b>Width: %{customdata[0]} ft</b><extra></extra>",
+            ))
+    elif not cc_mode and "bathy" in layers:
+        # Historic Conditions: one filled polygon per depth band, covering every
+        # confirmed survey from that year at that year's real lowest river stage
+        # (see LOW_WATER_POLY_BY_YEAR) -- replaces individual survey dots.
+        _add_depth_polygon_bin_traces(fig, LOW_WATER_POLY_BY_YEAR.get(year, []))
+        # constraining/narrow points along that year's low-water channel (see
+        # NARROW_WIDTHS_BY_YEAR). Points under the same 300ft bottleneck threshold
+        # Current Conditions uses get its Navigation Bottleneck warning icon; wider
+        # ones still worth flagging get a plain orange dot instead.
+        df_narrow = NARROW_WIDTHS_BY_YEAR.get(year)
+        if df_narrow is not None:
+            is_bottleneck = df_narrow["width"] < NAVIGABLE_WIDTH_HIGH_FT
+            df_bottleneck_pts = df_narrow[is_bottleneck]
+            df_wide_pts = df_narrow[~is_bottleneck]
+            _add_bottleneck_icon_markers(
+                fig, icon_layers,
+                df_bottleneck_pts["lon"], df_bottleneck_pts["lat"], df_bottleneck_pts["width"],
+            )
+            if not df_wide_pts.empty:
+                fig.add_trace(go.Scattermap(
+                    lon=df_wide_pts["lon"],
+                    lat=df_wide_pts["lat"],
+                    mode="markers",
+                    marker=dict(size=12, color="#fb8c00"),
+                    showlegend=False,
+                    customdata=df_wide_pts[["width"]].round().astype(int).values,
+                    hovertemplate="<b>Width: %{customdata[0]} ft</b><extra></extra>",
+                ))
 
     # dredging/shoaling markers - one trace per category so each can be toggled and colored
     # on its own (draft restriction is drawn separately above, behind the bathymetry layer).
@@ -3014,28 +3103,6 @@ def update_map(year, layers_cc, layers_full, selected_survey, selected_shoaling_
                 showlegend=False,
             ))
 
-    # river depth layer -- draws one precomputed polygon per depth bin for the whole
-    # year, combining every confirmed survey (see
-    # update_bathym/make_combined_depth_polygons.py: newer surveys' polygons win over
-    # older ones wherever they overlap). Not built live -- the daily pipeline
-    # regenerates every scenario file every morning (and after a survey is
-    # confirmed/reviewed). "current" (default) is shifted to today's actual river stage;
-    # "20XXlowwater" is shifted to the stage each gage read on that year's lowest Memphis
-    # reading (LOW_WATER_YEARS) -- all only ever produced for the current year's surveys,
-    # see the depth-scenario-radio control.
-    if "river_depth" in layers:
-        suffix = "" if depth_scenario == "current" else f"_{depth_scenario}"
-        combined_path = _DEPTH_POLY_DIR / f"{year}_combined_depth_polygons{suffix}.geojson"
-        if combined_path.exists():
-            _add_depth_polygon_traces(fig, combined_path)
-
-    # depth polygon overlay for clicked survey
-    if selected_survey:
-        sid = selected_survey.get("survey_id", "")
-        poly_path = _DEPTH_POLY_DIR / f"{sid}_depth_polygons.geojson"
-        if poly_path.exists():
-            _add_depth_polygon_traces(fig, poly_path)
-
     # AIS-derived dredge activity, shown alongside the manually logged dredging notices
     # above when the "Dredging" layer is on. Only covers 2021-2024 -- other years show
     # nothing here. Polygon layer is the year's aggregate footprint (hover = totals);
@@ -3172,230 +3239,6 @@ def render_notice_detail(data):
         ]
 
     return NOTICE_DETAIL_VISIBLE, children
-
-
-# --------------------------------------------------
-# SURVEY DEPTH POLYGON CLICK
-# --------------------------------------------------
-
-@app.callback(
-    Output("selected-survey-store", "data"),
-    Input("map", "clickData"),
-    Input("survey-detail-close", "n_clicks"),
-    State("selected-survey-store", "data"),
-    prevent_initial_call=True,
-)
-def handle_survey_click(click_data, n_close, current):
-    if dash.ctx.triggered_id == "survey-detail-close":
-        return None
-    if not click_data or not click_data.get("points"):
-        return dash.no_update
-    customdata = click_data["points"][0].get("customdata")
-    if not customdata or customdata[0] != "bathy":
-        return dash.no_update
-    survey_id = customdata[3]
-    if survey_id not in DEPTH_POLY_FILES:
-        return dash.no_update
-    # toggle off if clicking the same survey again
-    if current and current.get("survey_id") == survey_id:
-        return None
-    date_str = customdata[1]
-    gage_name = customdata[6] if len(customdata) > 6 else "Memphis"
-    gage_value = customdata[7] if len(customdata) > 7 else -10
-    gage_uncertainty = customdata[8] if len(customdata) > 8 else 0.0
-    return {
-        "survey_id": survey_id, "date": date_str,
-        "gage_name": gage_name, "gage_value": gage_value, "gage_uncertainty": gage_uncertainty,
-    }
-
-
-@app.callback(
-    Output("survey-detail-banner", "style"),
-    Output("survey-detail-label", "children"),
-    Input("selected-survey-store", "data"),
-)
-def render_survey_banner(data):
-    if not data:
-        return SURVEY_BANNER_HIDDEN, ""
-    label = html.Div([
-        html.Div(
-            "U.S Army Corps of Engineers Hydrographic Survey:",
-            style={"font-size": "12px", "color": "#666", "line-height": "1.3", "white-space": "nowrap"},
-        ),
-        html.Div(
-            data["survey_id"],
-            style={"font-size": "14px", "font-weight": "bold", "color": "#1a237e", "margin-top": "2px", "white-space": "nowrap"},
-        ),
-        html.Div(
-            data["date"],
-            style={"font-size": "12px", "color": "#888", "margin-top": "2px", "white-space": "nowrap"},
-        ),
-    ])
-    return SURVEY_BANNER_VISIBLE, label
-
-
-@app.callback(
-    Output("current-gage-box", "style"),
-    Output("current-gage-box", "children"),
-    Output("survey-zoom-memo", "style"),
-    Output("survey-zoom-memo", "children"),
-    Input("selected-survey-store", "data"),
-)
-def render_current_gage(data):
-    if not data:
-        return CURRENT_GAGE_HIDDEN, [], ZOOM_MEMO_HIDDEN, []
-    gage_name = data.get("gage_name", "Memphis")
-    latest = river_stage_df[river_stage_df["gage"] == gage_name].sort_values("date")
-    if latest.empty:
-        return CURRENT_GAGE_HIDDEN, [], ZOOM_MEMO_HIDDEN, []
-    latest_row = latest.iloc[-1]
-    content = [
-        html.Div(
-            f"{gage_name} gage is currently at",
-            style={"font-size": "12px", "color": "#444", "line-height": "1.3"},
-        ),
-        html.Div(
-            f"{latest_row['stage']:.1f} ft",
-            style={"font-size": "22px", "font-weight": "bold", "color": "#1a237e", "margin-top": "2px"},
-        ),
-        html.Div(
-            f"as of {latest_row['date'].strftime('%B %-d, %Y')}",
-            style={"font-size": "10px", "color": "#888", "margin-top": "2px"},
-        ),
-    ]
-    memo = "If you can't see the depth map, make sure to zoom in completely on the survey point you selected."
-    return CURRENT_GAGE_VISIBLE, content, ZOOM_MEMO_VISIBLE, memo
-
-
-@app.callback(
-    Output("survey-legend-box", "style"),
-    Output("survey-legend-content", "children"),
-    Output("gage-freq-link", "children"),
-    Output("gage-freq-link", "style"),
-    Input("selected-survey-store", "data"),
-)
-def render_survey_legend(data):
-    if not data:
-        return SURVEY_LEGEND_HIDDEN, [], "", GAGE_FREQ_LINK_HIDDEN
-    gage_name = data.get("gage_name", "Memphis")
-    gage_value = data.get("gage_value", -10)
-    gage_uncertainty = data.get("gage_uncertainty", 0.0)
-    title = html.Div([
-        html.Div(
-            "River Depth When",
-            style={"font-size": "16px", "font-weight": "normal", "line-height": "1.3", "text-transform": "uppercase"},
-        ),
-        html.Div(
-            [
-                html.Span(gage_name, style={"font-weight": "bold"}),
-                " Gage is at ",
-                html.Span(f"{int(gage_value)} ft", style={"font-weight": "bold"}),
-            ],
-            style={"font-size": "16px", "font-weight": "normal", "line-height": "1.3", "text-transform": "uppercase"},
-        ),
-        html.Div(
-            f"Depth estimate accurate to ±{gage_uncertainty:g} ft",
-            style={"font-size": "11px", "font-style": "italic", "color": "#666", "margin-top": "4px"},
-        ),
-    ], style={"margin-bottom": "10px"})
-    rows = [
-        html.Div(
-            style={"display": "flex", "align-items": "center", "margin-bottom": "5px"},
-            children=[
-                html.Span(style={
-                    "display": "inline-block", "width": "18px", "height": "14px",
-                    "background": color, "border-radius": "2px", "flex-shrink": "0",
-                }),
-                html.Span(bin_label, style={"font-size": "12px", "margin-left": "8px"}),
-            ]
-        )
-        for bin_label, color in DEPTH_POLY_COLORS.items()
-    ]
-    n_rows = len(rows) // 2 + len(rows) % 2
-    rows_grid = html.Div(
-        rows,
-        style={
-            "display": "grid", "grid-template-columns": "1fr 1fr",
-            "grid-template-rows": f"repeat({n_rows}, auto)", "grid-auto-flow": "column",
-            "column-gap": "6px",
-        },
-    )
-    link_text = f"How often does the {gage_name} gage reach {int(gage_value)}ft?"
-    content = [title, rows_grid]
-    return SURVEY_LEGEND_VISIBLE, content, link_text, GAGE_FREQ_LINK_VISIBLE
-
-
-@app.callback(
-    Output("gage-freq-store", "data"),
-    Input("gage-freq-link", "n_clicks"),
-    Input("gage-freq-close", "n_clicks"),
-    Input("selected-survey-store", "data"),
-    prevent_initial_call=True,
-)
-def toggle_gage_freq(n_open, n_close, survey_data):
-    # closing the panel directly, or changing/closing the survey it belongs to,
-    # both dismiss it -- otherwise it could linger showing a stale gage after the
-    # underlying survey selection has moved on
-    if dash.ctx.triggered_id in ("gage-freq-close", "selected-survey-store"):
-        return None
-    if not survey_data:
-        return dash.no_update
-    return {
-        "gage_name": survey_data.get("gage_name", "Memphis"),
-        "gage_value": survey_data.get("gage_value", -10),
-    }
-
-
-@app.callback(
-    Output("gage-freq-panel", "style"),
-    Output("gage-freq-graph", "figure"),
-    Input("gage-freq-store", "data"),
-)
-def render_gage_freq(data):
-    empty_fig = go.Figure()
-    empty_fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", margin=dict(l=0, r=0, t=0, b=0))
-    if not data:
-        return GAGE_FREQ_HIDDEN, empty_fig
-
-    gage_name = data["gage_name"]
-    gage_value = data["gage_value"]
-    cutoff = pd.Timestamp.today().normalize() - pd.DateOffset(years=5)
-    df = river_stage_df[
-        (river_stage_df["gage"] == gage_name) & (river_stage_df["date"] >= cutoff)
-    ][["date", "stage"]].sort_values("date").reset_index(drop=True)
-
-    below = df[df["stage"] <= gage_value]
-
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(
-        x=df["date"], y=df["stage"], mode="lines", name="Stage",
-        line=dict(color="#1565c0", width=1),
-        hovertemplate="%{x|%B %d, %Y}<br>%{y:.1f} ft<extra></extra>",
-    ))
-    fig.add_trace(go.Scatter(
-        x=below["date"], y=below["stage"], mode="markers",
-        name=f"At/below {int(gage_value)} ft",
-        marker=dict(color="#e53935", size=5),
-        hovertemplate="%{x|%B %d, %Y}<br>%{y:.1f} ft<extra></extra>",
-    ))
-    fig.add_hline(y=gage_value, line=dict(color="#e53935", width=1, dash="dot"))
-    # light grey dotted line at Jan 1 of each year in range, so a multi-year span is
-    # easier to read at a glance
-    for year in range(cutoff.year, pd.Timestamp.today().year + 1):
-        fig.add_vline(x=pd.Timestamp(year=year, month=1, day=1), line=dict(color="#bbb", width=1, dash="dot"))
-    fig.update_layout(
-        margin=dict(l=55, r=15, t=15, b=25),
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(245,248,255,1)",
-        showlegend=False,
-        xaxis=dict(showgrid=False, tickfont=dict(size=10)),
-        yaxis=dict(
-            title=f"{gage_name} River Stage (ft)", gridcolor="#ddd",
-            tickfont=dict(size=13), title_font=dict(size=14),
-        ),
-        hovermode="closest",
-    )
-    return GAGE_FREQ_VISIBLE, fig
 
 
 @app.callback(
