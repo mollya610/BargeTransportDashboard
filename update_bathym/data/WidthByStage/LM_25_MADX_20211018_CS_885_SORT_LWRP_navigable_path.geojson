@@ -1,7 +1,0 @@
-{
-"type": "FeatureCollection",
-"crs": { "type": "name", "properties": { "name": "urn:ogc:def:crs:OGC:1.3:CRS84" } },
-"features": [
-{ "type": "Feature", "properties": { "survey_id": "LM_25_MADX_20211018_CS_885_SORT_LWRP", "method": "lines", "connected": "yes", "through_width_ft": 1163.0, "gage": "Memphis", "anchor_stage_ft": -10 }, "geometry": { "type": "LineString", "coordinates": [ [ -89.564934609206247, 36.529571404103947 ], [ -89.565720240964026, 36.529891827928751 ], [ -89.566011423964127, 36.530401173791695 ], [ -89.566536627736397, 36.530926082344109 ], [ -89.566859479191109, 36.531394362621619 ], [ -89.567681220911552, 36.532918833340901 ], [ -89.56814561874971, 36.533384884871943 ] ] } }
-]
-}

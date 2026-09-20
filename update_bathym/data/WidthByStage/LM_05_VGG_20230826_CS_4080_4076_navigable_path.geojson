@@ -1,8 +1,0 @@
-{
-"type": "FeatureCollection",
-"name": "LM_05_VGG_20230826_CS_4080_4076_navigable_path",
-"crs": { "type": "name", "properties": { "name": "urn:ogc:def:crs:OGC:1.3:CRS84" } },
-"features": [
-{ "type": "Feature", "properties": { "survey_id": "LM_05_VGG_20230826_CS_4080_4076", "method": "lines", "connected": "yes", "through_width_ft": 1276.2, "gage": "Greenville", "anchor_stage_ft": 7 }, "geometry": { "type": "LineString", "coordinates": [ [ -91.059133938861422, 32.038238802205917 ], [ -91.061280279850862, 32.035626483340238 ], [ -91.063016307239806, 32.032839605306876 ] ] } }
-]
-}

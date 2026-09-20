@@ -1,7 +1,0 @@
-{
-"type": "FeatureCollection",
-"crs": { "type": "name", "properties": { "name": "urn:ogc:def:crs:OGC:1.3:CRS84" } },
-"features": [
-{ "type": "Feature", "properties": { "survey_id": "UM_SL_MRC_20260804_BD_1", "method": "blob", "connected": "no", "through_width_ft": 0.0, "gage": "St. Louis", "anchor_stage_ft": -3 }, "geometry": { "type": "LineString", "coordinates": [ [ -90.119636362754378, 38.7956240332894 ], [ -90.119925440937706, 38.795483170961617 ], [ -90.120245645161589, 38.795382255786087 ], [ -90.120568047967012, 38.795286654710679 ], [ -90.120903056933756, 38.79522151751172 ], [ -90.121246203032825, 38.795238800476383 ], [ -90.12157385168247, 38.795182055451008 ] ] } }
-]
-}

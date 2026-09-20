@@ -1,7 +1,0 @@
-{
-"type": "FeatureCollection",
-"crs": { "type": "name", "properties": { "name": "urn:ogc:def:crs:OGC:1.3:CRS84" } },
-"features": [
-{ "type": "Feature", "properties": { "survey_id": "UM_SL_DIC_20260819_BD_1", "method": "lines", "connected": "no", "through_width_ft": 418.8, "gage": "St. Louis", "anchor_stage_ft": -3 }, "geometry": { "type": "Point", "coordinates": [ -89.459966818152452, 37.251157624645856 ] } }
-]
-}

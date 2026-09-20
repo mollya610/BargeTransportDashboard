@@ -1,7 +1,0 @@
-{
-"type": "FeatureCollection",
-"crs": { "type": "name", "properties": { "name": "urn:ogc:def:crs:OGC:1.3:CRS84" } },
-"features": [
-{ "type": "Feature", "properties": { "survey_id": "LM_11_YBS_20260423_CS_5502_5478", "method": "lines", "connected": "no", "through_width_ft": 1685.9, "gage": "Greenville", "anchor_stage_ft": 7 }, "geometry": { "type": "Point", "coordinates": [ -91.127473323430706, 33.386029759018093 ] } }
-]
-}
