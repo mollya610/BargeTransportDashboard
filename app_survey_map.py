@@ -15,10 +15,88 @@ import textwrap
 
 import dash
 from dash import dcc, html, Input, Output, State
+import geopandas as gpd
+import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
+from shapely import wkt
 
 import app as base
+
+# Per-survey bathymetry data and risk classification -- app.py stopped loading
+# bathym_fixed.csv once Current Conditions dropped its vessel_path_width_ft-based
+# Navigation Bottleneck marker (that data source is being redone), but this page's whole
+# job is showing individual surveys with a risk tier, so it still needs it. Loaded here
+# instead of in app.py to keep the dependency scoped to the one page that uses it.
+bathy = pd.read_csv("bathym_fixed.csv")
+if "confirmed" in bathy.columns:
+    bathy = bathy[bathy["confirmed"].fillna("yes").str.lower() == "yes"]
+bathy["year"] = bathy["year"].astype(int)
+
+# Risk classification: 6_review_surveys.py's manual at_risk field is retired in favor of
+# 7_compute_navigable_width.py's objective vessel_path_connected/width_ft (whether a
+# continuous WIDTH_TARGET_DEPTH_FT-deep path exists across the reach, and how wide it
+# is). Falls back to the legacy at_risk column for any survey stage 7 hasn't measured
+# yet, and to "low" if neither is available.
+
+
+def _risk_from_vessel_path(row):
+    connected = str(row.get("vessel_path_connected", "")).strip().lower()
+    if connected == "no":
+        return "high"
+    if connected != "yes":
+        return None  # not yet measured by 7_compute_navigable_width.py
+    width_ft = row.get("vessel_path_width_ft")
+    if pd.isna(width_ft):
+        return None
+    if width_ft < base.NAVIGABLE_WIDTH_HIGH_FT:
+        return "high"
+    if width_ft < base.NAVIGABLE_WIDTH_LOW_FT:
+        return "medium"
+    return "low"
+
+
+if "vessel_path_connected" in bathy.columns:
+    _vessel_risk = bathy.apply(_risk_from_vessel_path, axis=1)
+else:
+    _vessel_risk = pd.Series(None, index=bathy.index, dtype=object)
+_legacy_risk = bathy["at_risk"] if "at_risk" in bathy.columns else pd.Series(None, index=bathy.index, dtype=object)
+bathy["at_risk_eff"] = _vessel_risk.fillna(_legacy_risk).fillna("low")
+
+# get center point for bathym measures
+bathy["geometry"] = bathy["geometry"].apply(wkt.loads)
+bathy = gpd.GeoDataFrame(bathy, geometry="geometry", crs="EPSG:4326")
+bathy["rep_point"] = bathy.geometry.representative_point()
+bathy["LON"] = bathy["rep_point"].apply(lambda p: p.x)
+bathy["LAT"] = bathy["rep_point"].apply(lambda p: p.y)
+bathy = pd.DataFrame(bathy.drop(columns=["geometry", "rep_point"]))
+
+# for at-risk surveys, plot the dot at the actual problem spot within the surveyed area
+# instead of the survey's overall center: 7_compute_navigable_width.py's bottleneck point
+# (where the navigable path is narrowest or breaks entirely) when available, falling back
+# to 6_review_surveys.py's manually marked problem_lon/lat for surveys stage 7 hasn't
+# measured yet. Full (low-risk) surveys always show at their overall center.
+_bottleneck_lon = pd.to_numeric(bathy["vessel_path_bottleneck_lon"], errors="coerce") if "vessel_path_bottleneck_lon" in bathy.columns else pd.Series(np.nan, index=bathy.index)
+_bottleneck_lat = pd.to_numeric(bathy["vessel_path_bottleneck_lat"], errors="coerce") if "vessel_path_bottleneck_lat" in bathy.columns else pd.Series(np.nan, index=bathy.index)
+_legacy_lon = pd.to_numeric(bathy["problem_lon"], errors="coerce") if "problem_lon" in bathy.columns else pd.Series(np.nan, index=bathy.index)
+_legacy_lat = pd.to_numeric(bathy["problem_lat"], errors="coerce") if "problem_lat" in bathy.columns else pd.Series(np.nan, index=bathy.index)
+problem_lon = _bottleneck_lon.fillna(_legacy_lon)
+problem_lat = _bottleneck_lat.fillna(_legacy_lat)
+has_problem_point = bathy["at_risk_eff"].isin(["medium", "high"]) & problem_lon.notna() & problem_lat.notna()
+bathy.loc[has_problem_point, "LON"] = problem_lon[has_problem_point]
+bathy.loc[has_problem_point, "LAT"] = problem_lat[has_problem_point]
+bathy["survey_id"] = (
+    bathy["file"]
+    .str.replace("_SurveyPoint.gpkg", "", regex=False)
+    .str.replace("_w_datum.gpkg", "", regex=False)
+    .str.replace(".gpkg", "", regex=False)
+)
+
+# survey IDs that have a depth polygon GeoJSON available for click-through detail
+DEPTH_POLY_FILES = {
+    f.stem.replace("_depth_polygons", "")
+    for f in base._DEPTH_POLY_DIR.glob("*_depth_polygons.geojson")
+} if base._DEPTH_POLY_DIR.exists() else set()
 
 RISK_BINS = [
     ("Low Risk", "#2e7d32", 9),
@@ -324,13 +402,13 @@ def update_map(year, layers, selected_survey, selected_shoaling_mile):
     layers = layers or []
 
     fig = go.Figure()
-    df_b = base.bathy[base.bathy["year"] == year]
+    df_b = bathy[bathy["year"] == year]
     # UM (Upper Mississippi) survey dots, north of Cairo, are only shown for 2026 onward
     if year < 2026:
         df_b = df_b[~df_b["survey_id"].str.startswith("UM")]
     # only show surveys that have a depth-polygon file -- clicking a dot with none does
     # nothing (see handle_survey_click), which reads as broken, so don't plot it at all
-    df_b = df_b[df_b["survey_id"].isin(base.DEPTH_POLY_FILES)]
+    df_b = df_b[df_b["survey_id"].isin(DEPTH_POLY_FILES)]
     # hide the dot for whichever survey is currently showing its polygon overlay, but if
     # it's High risk, keep its marker up (faded) at the problem point so it's not lost
     # under the polygon
@@ -338,7 +416,7 @@ def update_map(year, layers, selected_survey, selected_shoaling_mile):
     if selected_survey:
         sid = selected_survey.get("survey_id")
         df_b = df_b[df_b["survey_id"] != sid]
-        match = base.bathy[(base.bathy["survey_id"] == sid) & (base.bathy["at_risk_eff"] == "high")]
+        match = bathy[(bathy["survey_id"] == sid) & (bathy["at_risk_eff"] == "high")]
         if not match.empty:
             selected_at_risk_row = match.iloc[0]
     df_n = base.notices[base.notices["year"] == year]
@@ -432,7 +510,7 @@ def update_map(year, layers, selected_survey, selected_shoaling_mile):
                 continue
             df_bin["date_fmt"] = pd.to_datetime(df_bin["date"]).dt.strftime("%B %-d, %Y")
             df_bin["click_hint"] = df_bin["survey_id"].apply(
-                lambda sid: "<i>Click for depth map and details</i>" if sid in base.DEPTH_POLY_FILES else ""
+                lambda sid: "<i>Click for depth map and details</i>" if sid in DEPTH_POLY_FILES else ""
             )
             gage_info = df_bin["milemarker"].apply(_gage_info)
             df_bin["gage_name"] = gage_info.apply(lambda t: t[0])
@@ -746,7 +824,7 @@ def handle_survey_click(click_data, n_close, current):
     if not customdata or customdata[0] != "bathy":
         return dash.no_update
     survey_id = customdata[3]
-    if survey_id not in base.DEPTH_POLY_FILES:
+    if survey_id not in DEPTH_POLY_FILES:
         return dash.no_update
     if current and current.get("survey_id") == survey_id:
         return None
