@@ -14,7 +14,6 @@ from shapely.ops import unary_union
 from datetime import date, datetime
 import numpy as np
 import pandas as pd
-from shapely import wkt
 from PIL import Image, ImageDraw
 
 
@@ -89,87 +88,28 @@ if not os.path.exists("assets/at_risk_marker.png"):
 
 
 # LOAD DATA
-bathy = pd.read_csv("bathym_fixed.csv")
-if "confirmed" in bathy.columns:
-    bathy = bathy[bathy["confirmed"].fillna("yes").str.lower() == "yes"]
-
-# Ensure year is int
-bathy["year"] = bathy["year"].astype(int)
-bathy["date_dt"] = pd.to_datetime(bathy["date"]).dt.tz_localize(None)
-
-years = sorted(bathy["year"].unique())
-# Current year is excluded -- Historic Conditions covers completed years only, since the
-# current year's up-to-date picture is what the Current Conditions tab is for.
-years = [int(y) for y in years if 2021 <= int(y) < date.today().year]
+# Years with a confirmed historic low-water depth-polygon layer (see
+# LOW_WATER_POLY_BY_YEAR below) -- Historic Conditions' selectable years. Current year is
+# excluded -- Historic Conditions covers completed years only, since the current year's
+# up-to-date picture is what the Current Conditions tab is for.
+_LOW_WATER_POLY_DIR = Path("DepthPolygons")
+years = sorted(
+    int(p.name.replace("_low_water_polygon", ""))
+    for p in _LOW_WATER_POLY_DIR.glob("*_low_water_polygon")
+    if p.is_dir()
+)
 DEFAULT_HISTORIC_YEAR = years[-1]  # most recent completed year -- Historic Conditions opens here
 
-# Risk classification: 6_review_surveys.py's manual at_risk field is retired in favor of
-# 7_compute_navigable_width.py's objective vessel_path_connected/width_ft (whether a
-# continuous WIDTH_TARGET_DEPTH_FT-deep path exists across the reach, and how wide it
-# is). Falls back to the legacy at_risk column for any survey stage 7 hasn't measured
-# yet, and to "low" if neither is available.
+# Navigable-width tiers for Historic Conditions' narrow-width points (see
+# NARROW_WIDTHS_BY_YEAR) -- the Current Conditions "Navigation Bottleneck" marker that
+# used to share these thresholds (from bathym_fixed.csv's vessel_path_width_ft) was
+# pulled out since that data source is being redone; these constants stay for Historic
+# Conditions' own constraining points.
 NAVIGABLE_WIDTH_HIGH_FT = 300   # below this: High risk
 NAVIGABLE_WIDTH_LOW_FT = 800    # this and above: Low risk (between the two: Medium)
 
-
-def _risk_from_vessel_path(row):
-    connected = str(row.get("vessel_path_connected", "")).strip().lower()
-    if connected == "no":
-        return "high"
-    if connected != "yes":
-        return None  # not yet measured by 7_compute_navigable_width.py
-    width_ft = row.get("vessel_path_width_ft")
-    if pd.isna(width_ft):
-        return None
-    if width_ft < NAVIGABLE_WIDTH_HIGH_FT:
-        return "high"
-    if width_ft < NAVIGABLE_WIDTH_LOW_FT:
-        return "medium"
-    return "low"
-
-
-if "vessel_path_connected" in bathy.columns:
-    _vessel_risk = bathy.apply(_risk_from_vessel_path, axis=1)
-else:
-    _vessel_risk = pd.Series(None, index=bathy.index, dtype=object)
-_legacy_risk = bathy["at_risk"] if "at_risk" in bathy.columns else pd.Series(None, index=bathy.index, dtype=object)
-bathy["at_risk_eff"] = _vessel_risk.fillna(_legacy_risk).fillna("low")
-
-# get center point for bathym measures
-bathy["geometry"] = bathy["geometry"].apply(wkt.loads)
-bathy = gpd.GeoDataFrame(bathy, geometry="geometry", crs="EPSG:4326")
-bathy["rep_point"] = bathy.geometry.representative_point()
-bathy["LON"] = bathy["rep_point"].apply(lambda p: p.x)
-bathy["LAT"] = bathy["rep_point"].apply(lambda p: p.y)
-bathy = pd.DataFrame(bathy.drop(columns=["geometry", "rep_point"]))
-
-# for at-risk surveys, plot the dot at the actual problem spot within the surveyed area
-# instead of the survey's overall center: 7_compute_navigable_width.py's bottleneck point
-# (where the navigable path is narrowest or breaks entirely) when available, falling back
-# to 6_review_surveys.py's manually marked problem_lon/lat for surveys stage 7 hasn't
-# measured yet. Full (low-risk) surveys always show at their overall center.
-_bottleneck_lon = pd.to_numeric(bathy["vessel_path_bottleneck_lon"], errors="coerce") if "vessel_path_bottleneck_lon" in bathy.columns else pd.Series(np.nan, index=bathy.index)
-_bottleneck_lat = pd.to_numeric(bathy["vessel_path_bottleneck_lat"], errors="coerce") if "vessel_path_bottleneck_lat" in bathy.columns else pd.Series(np.nan, index=bathy.index)
-_legacy_lon = pd.to_numeric(bathy["problem_lon"], errors="coerce") if "problem_lon" in bathy.columns else pd.Series(np.nan, index=bathy.index)
-_legacy_lat = pd.to_numeric(bathy["problem_lat"], errors="coerce") if "problem_lat" in bathy.columns else pd.Series(np.nan, index=bathy.index)
-problem_lon = _bottleneck_lon.fillna(_legacy_lon)
-problem_lat = _bottleneck_lat.fillna(_legacy_lat)
-has_problem_point = bathy["at_risk_eff"].isin(["medium", "high"]) & problem_lon.notna() & problem_lat.notna()
-bathy.loc[has_problem_point, "LON"] = problem_lon[has_problem_point]
-bathy.loc[has_problem_point, "LAT"] = problem_lat[has_problem_point]
-bathy["survey_id"] = (
-    bathy["file"]
-    .str.replace("_SurveyPoint.gpkg", "", regex=False)
-    .str.replace("_w_datum.gpkg", "", regex=False)
-    .str.replace(".gpkg", "", regex=False)
-)
-
-# survey IDs that have a depth polygon GeoJSON available for click-through detail
+# where the "River Depth" layer's per-year combined depth-polygon geojsons live
 _DEPTH_POLY_DIR = Path("update_bathym/data/DepthPolygons")
-DEPTH_POLY_FILES = {
-    f.stem.replace("_depth_polygons", "")
-    for f in _DEPTH_POLY_DIR.glob("*_depth_polygons.geojson")
-} if _DEPTH_POLY_DIR.exists() else set()
 
 # per-gage uncertainty (ft) for the "actual depth could vary ±X ft" note on a survey's
 # depth legend -- the anchor gages themselves (stlouis/memphis/greenville) are 0 by
@@ -238,61 +178,6 @@ LOW_WATER_YEAR_LABELS = {
     2024: "November 3, 2024",
     2025: "October 20, 2025",
 }
-
-# Stage each gage read on that year's Memphis low-water date -- keep in sync with
-# update_bathym/make_combined_depth_polygons.py's LOW_WATER_YEARS (same duplication
-# pattern as GAGE_THRESHOLDS/LOW_WATER_YEAR_LABELS above: app.py doesn't import the
-# update_bathym module).
-LOW_WATER_SCENARIO_STAGES = {
-    2022: {"St. Louis": -2.25, "Memphis": -10.74, "Greenville": 5.95},
-    2023: {"St. Louis": 0.50, "Memphis": -11.97, "Greenville": 5.59},
-    2024: {"St. Louis": 0.71, "Memphis": -10.31, "Greenville": 5.92},
-    2025: {"St. Louis": -0.57, "Memphis": -8.83, "Greenville": 8.95},
-}
-
-# per-survey stage->width lookup tables from update_bathym/8_compute_width_by_stage.py
-# (one row per whole-foot stage tested at that survey's anchor gage) -- lets the
-# Current Conditions "Navigation Bottleneck" marker move to wherever the channel is
-# narrowest under the *selected* depth scenario, without recomputing anything: the
-# table already spans every stage worth asking about, so picking a scenario is just a
-# row lookup, and a new day's actual gage reading needs no recompute either, just a
-# lookup at that reading's rounded stage.
-WIDTH_BY_STAGE_DIR = Path("update_bathym/data/WidthByStage")
-_width_by_stage_cache = {}
-
-
-def _scenario_stage_ft(gage_name, depth_scenario):
-    """The river stage (ft) the selected depth-scenario-radio option represents at
-    `gage_name`. "current" tracks today's actual reading (same gage feed the CC gage
-    panel/river-depth layer use); a "20XXlowwater" value is that year's fixed
-    historical low-water stage (LOW_WATER_SCENARIO_STAGES)."""
-    if depth_scenario == "current":
-        readings = river_stage_df[river_stage_df["gage"] == gage_name]
-        if readings.empty:
-            return GAGE_THRESHOLDS[gage_name]
-        return float(readings.sort_values("date")["stage"].iloc[-1])
-    year = int(str(depth_scenario).replace("lowwater", ""))
-    return LOW_WATER_SCENARIO_STAGES[year][gage_name]
-
-
-def _width_at_stage(survey_id, stage_ft):
-    """(width_ft, bottleneck_lon, bottleneck_lat) for survey_id at the whole-foot
-    stage nearest `stage_ft`, from its precomputed width_by_stage.csv. Returns None if
-    that table doesn't exist -- the survey's raw NAVD88Files gpkg was already deleted
-    (by 9_make_depth_polygons.py) before 8_compute_width_by_stage.py could run on it --
-    or `stage_ft` falls outside the range that table tested."""
-    if survey_id not in _width_by_stage_cache:
-        path = WIDTH_BY_STAGE_DIR / f"{survey_id}_width_by_stage.csv"
-        _width_by_stage_cache[survey_id] = pd.read_csv(path) if path.exists() else None
-    table = _width_by_stage_cache[survey_id]
-    if table is None:
-        return None
-    row = table[table["stage_ft"] == round(stage_ft)]
-    if row.empty:
-        return None
-    row = row.iloc[0]
-    return float(row["width_ft"]), float(row["bottleneck_lon"]), float(row["bottleneck_lat"])
-
 
 def _ordinal(n):
     """11/12/13 -> 'th' regardless of last digit (11th, not 11st); everything else keys
@@ -938,8 +823,8 @@ def _add_depth_polygon_traces(fig, poly_path):
 # actually looked like at that year's real lowest river stage. Unlike the "River
 # Depth" combined layer above (which always reflects the *current* year's surveys,
 # reshaped to any past low-water stage), these are locked to each year's own surveys.
-# Replaces individual survey dots on the Historic Conditions tab.
-_LOW_WATER_POLY_DIR = Path("DepthPolygons")
+# Replaces individual survey dots on the Historic Conditions tab. (_LOW_WATER_POLY_DIR
+# is defined up top, alongside `years`, which is built from this same directory.)
 _LOW_WATER_BIN_ORDER = {label: i for i, (_, _, label) in enumerate(_DISPLAY_BINS)}
 LOW_WATER_POLY_BY_YEAR = {}
 for _lwp_year in years:
@@ -2685,13 +2570,6 @@ def update_map(year, layers_cc, layers_full, selected_shoaling_mile, cc_mode, de
     layers = layers_cc if cc_mode else layers_full
 
     fig = go.Figure()
-    df_b = bathy[bathy['year']==year]
-    # UM (Upper Mississippi) survey dots, north of Cairo, are only shown for 2026 onward
-    if year < 2026:
-        df_b = df_b[~df_b["survey_id"].str.startswith("UM")]
-    # only consider surveys that have a depth-polygon file -- used below by Current
-    # Conditions' Navigation Bottleneck marker
-    df_b = df_b[df_b["survey_id"].isin(DEPTH_POLY_FILES)]
     df_n = notices[notices['year']==year]
     # plot river
     fig.add_trace(
@@ -2805,73 +2683,13 @@ def update_map(year, layers_cc, layers_full, selected_shoaling_mile, cc_mode, de
 
     #  bathym layer - drawn here (before dredging/shoaling/other) so it sits behind them
     # on the map, but legendrank pushes it below them in the legend regardless of draw
-    # order. Current Conditions has no separate "bottleneck" checkbox -- constraining
-    # points are part of the "River Depth" layer, same as Historic Conditions.
-    if cc_mode and "river_depth" in layers:
-        # thresholds south of the Arkansas River confluence (~mile 580) are anchored
-        # to Greenville = 7ft instead of Memphis -- see threshold calculation/
-        # calculate_lowwater_thresh_datums.py's GREENVILLE_TARGET/CONFLUENCE_MILE
-        def _gage_info(m):
-            if m >= 951:
-                return "St. Louis", -3, "St. Louis gage is at -3ft"
-            if m >= 580:
-                return "Memphis", -10, "Memphis gage is at -10ft"
-            return "Greenville", 7, "Greenville gage is at 7ft"
-
-        # Current Conditions: the constraining-point markers' location and width are
-        # specific to the selected depth scenario -- looked up from each survey's
-        # precomputed stage->width table (8_compute_width_by_stage.py) rather than the
-        # fixed-threshold vessel_path_bottleneck_lon/lat columns (it has no scenario
-        # selector, so its markers are always "at this survey's own anchor-gage
-        # threshold"). These markers' hover just states the width -- they don't open a
-        # detail panel.
-        df_cc = df_b.copy()
-        gage_info = df_cc["milemarker"].apply(_gage_info)
-        df_cc["gage_name"] = gage_info.apply(lambda t: t[0])
-        stages = df_cc["gage_name"].apply(lambda g: _scenario_stage_ft(g, depth_scenario))
-        lookups = [
-            _width_at_stage(sid, stage) for sid, stage in zip(df_cc["survey_id"], stages)
-        ]
-        found = [lk is not None for lk in lookups]
-        df_cc["width_ft_scenario"] = [
-            lk[0] if lk is not None else np.nan for lk in lookups
-        ]
-        df_cc.loc[found, "LON"] = [lk[1] for lk, ok in zip(lookups, found) if ok]
-        df_cc.loc[found, "LAT"] = [lk[2] for lk, ok in zip(lookups, found) if ok]
-        # surveys whose raw gpkg was already gone before 8_compute_width_by_stage.py
-        # could build their table -- fall back to the static single-threshold value
-        # (LON/LAT for these already point at vessel_path_bottleneck_lon/lat, set
-        # up above where bathy["LON"]/["LAT"] are first built)
-        missing = ~np.array(found)
-        static_width = pd.to_numeric(df_cc.loc[missing, "vessel_path_width_ft"], errors="coerce")
-        # a fully broken path (no continuous 9ft-deep route at all) reads as "high
-        # risk" regardless of its stored through_width_ft -- see _risk_from_vessel_path
-        # -- so show it as a 0ft bottleneck rather than whatever partial width was
-        # stored for the disconnected pieces
-        not_connected = df_cc.loc[missing, "vessel_path_connected"].astype(str).str.lower() == "no"
-        df_cc.loc[missing, "width_ft_scenario"] = static_width.where(~not_connected, 0.0)
-        # same two tiers as Historic Conditions' constraining points: Not Navigable
-        # (warning icon) under 300ft, Reduced Navigability (orange dot) 300-800ft;
-        # 800ft+ is fully navigable and gets no marker.
-        is_not_navigable = df_cc["width_ft_scenario"] < NAVIGABLE_WIDTH_HIGH_FT
-        is_reduced = (df_cc["width_ft_scenario"] >= NAVIGABLE_WIDTH_HIGH_FT) & (df_cc["width_ft_scenario"] < NAVIGABLE_WIDTH_LOW_FT)
-        df_not_navigable = df_cc[is_not_navigable]
-        df_reduced = df_cc[is_reduced]
-        _add_bottleneck_icon_markers(
-            fig, icon_layers,
-            df_not_navigable["LON"], df_not_navigable["LAT"], df_not_navigable["width_ft_scenario"],
-        )
-        if not df_reduced.empty:
-            fig.add_trace(go.Scattermap(
-                lon=df_reduced["LON"],
-                lat=df_reduced["LAT"],
-                mode="markers",
-                marker=dict(size=12, color="#fb8c00"),
-                showlegend=False,
-                customdata=df_reduced[["width_ft_scenario"]].round().astype(int).values,
-                hovertemplate="<b>Width: %{customdata[0]} ft</b><extra></extra>",
-            ))
-    elif not cc_mode and "bathy" in layers:
+    # order.
+    #
+    # Current Conditions' "Navigation Bottleneck" markers (bathym_fixed.csv's
+    # vessel_path_width_ft/vessel_path_connected columns) were pulled out here --
+    # that data source is being redone; the legend entry describing them stays as a
+    # placeholder (see CC_LAYER_OPTIONS' "river_depth" option) until they're rebuilt.
+    if not cc_mode and "bathy" in layers:
         # Historic Conditions: one filled polygon per depth band, covering every
         # confirmed survey from that year at that year's real lowest river stage
         # (see LOW_WATER_POLY_BY_YEAR) -- replaces individual survey dots.
