@@ -95,7 +95,15 @@ for fpath in new_files:
     # can read depth_ft directly instead of re-deriving water_elev via their
     # own mile lookup. No survey-wide mean/aggregate is computed here.
     gdf_orig["depth_ft"] = water_elev - gdf_orig["Z_navd88"]
-    gdf_orig.to_file(fpath, driver="GPKG")
+    # write to a temp path and swap it in, rather than gdf_orig.to_file(fpath, ...)
+    # directly -- overwriting a gpkg in the same process that just read it is an
+    # unreliable GDAL/geopandas pattern: it can silently succeed while dropping the
+    # newly-added column, reverting to (most of) the original schema. Confirmed
+    # 2026-09-21 -- this is why depth_ft went missing on a chunk of confirmed surveys
+    # despite this line having run on them.
+    tmp_path = fpath.with_suffix(".gpkg.tmp")
+    gdf_orig.to_file(tmp_path, driver="GPKG")
+    tmp_path.replace(fpath)
 
     if gdf_orig["depth_ft"].isna().all():
         print(f"  WARNING: no valid Z_navd88 values, skipping {fpath.name}")

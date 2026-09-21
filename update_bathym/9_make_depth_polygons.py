@@ -13,15 +13,15 @@ at 0.2ft from one at 4.9ft, which matters once you're adding a 10+ft stage offse
 The coarse "<5 ft / 5-9 ft / ..." bands users actually see are applied later, in
 make_combined_depth_polygons.py's DISPLAY_BINS, after that shift.
 
-Run after 3_process_surveys.py (and optionally 4_compute_thresh_depth.py). Must also run
-LAST of the survey-processing stages, after 7_compute_navigable_width.py AND
-8_compute_width_by_stage.py -- this is the stage that deletes each survey's raw
-NAVD88Files/SurveyPointLayers gpkg once its polygons are written, and both of those
-still need that gpkg's depth_ft/survey_type columns:
+Run after 3_process_surveys.py (and optionally 4_compute_thresh_depth.py). Gates only on
+confirmed=="yes" -- no longer waits on 7_compute_navigable_width.py /
+7b_review_navigable_path.py's path_confirmed (navigable-width/risk classification is
+handled separately now). Deletes each survey's raw NAVD88Files/SurveyPointLayers gpkg
+once its polygons are written, so run 7/8 first if you still want width/risk data out of
+this particular gpkg -- once this stage runs, that raw data is gone:
 
     1_check_for_surveys.py -> 2_read_in_surveys.py -> 3_process_surveys.py ->
-    4_compute_thresh_depth.py -> 7_compute_navigable_width.py ->
-    8_compute_width_by_stage.py -> 9_make_depth_polygons.py
+    4_compute_thresh_depth.py -> 9_make_depth_polygons.py
 
 Re-runs are safe: already-processed surveys are skipped.
 """
@@ -110,21 +110,10 @@ new_files = [f for f in files if f.name.replace("_SurveyPoint.gpkg", "") not in 
 if CLEAN_BATHYMETRY_FILE.exists():
     bathym_fixed = pd.read_csv(CLEAN_BATHYMETRY_FILE)
     confirmed_files = set(bathym_fixed.loc[bathym_fixed["confirmed"] == "yes", "file"])
-    # also never delete a file ahead of 8_compute_width_by_stage.py, which still needs
-    # this same raw gpkg and won't run until a human has confirmed 7's path in
-    # 7b_review_navigable_path.py (path_confirmed=="yes") -- but ONLY for survey_types
-    # that actually go through 7/8 in the first place (checked per-file below, once
-    # survey_type is available off the gpkg itself); a sparse_lines survey never gets a
-    # path to confirm (7_compute_navigable_width.py skips it outright), so gating it on
-    # path_confirmed here would strand it here forever.
-    path_confirmed_files = set(bathym_fixed.loc[bathym_fixed["path_confirmed"] == "yes", "file"]) \
-        if "path_confirmed" in bathym_fixed.columns else set()
     not_yet_confirmed = [f for f in new_files if f.name not in confirmed_files]
     new_files = [f for f in new_files if f.name in confirmed_files]
     if not_yet_confirmed:
         print(f"{len(not_yet_confirmed)} survey(s) skipped, not confirmed=yes in {CLEAN_BATHYMETRY_FILE}")
-else:
-    path_confirmed_files = set()
 
 print(f"{len(new_files)} survey(s) to process ({len(files)} total, {len(already_done)} already done)")
 
@@ -146,10 +135,9 @@ for fpath in new_files:
         gdf = gdf.loc[gdf_utm.index]
         print(f"{survey_id}: real-points-only for depth polygons ({n_before} -> {len(gdf_utm)} pts)")
 
-    survey_type = gdf["survey_type"].iloc[0] if "survey_type" in gdf.columns else None
-    if survey_type != "sparse_lines" and fpath.name not in path_confirmed_files:
-        print(f"{survey_id}: path not confirmed, skipping (run 7b_review_navigable_path.py first)")
-        continue
+    # Depth polygons no longer gate on path_confirmed (7_compute_navigable_width.py /
+    # 7b_review_navigable_path.py) -- navigable-width/risk classification is handled
+    # separately now, so this stage only needs confirmed=="yes" above.
 
     # Look up Memphis=-5ft water surface elevation at the survey's river mile.
     # centroid of a point-union is just the mean of the points -- computing it this

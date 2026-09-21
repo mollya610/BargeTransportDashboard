@@ -62,16 +62,11 @@ NAVD88_DIR = SCRIPT_DIR / "data" / "NAVD88Files"
 SURVEYS_TO_REVIEW_DIR = SCRIPT_DIR / "data" / "SurveysToReview"
 BATHYM_FIXED_FILE = REPO_ROOT / "bathym_fixed.csv"
 
-# Temporary: restrict the review queue to only survey_ids on this list -- Molly only
-# wants her 2022 channel-width selection showing here right now, not every other
-# survey stage 7 happens to have processed. Same idea as
-# 6_review_surveys.py's own RESTRICT_TO_SURVEY_LIST_FILE. Set to None to go back to
-# reviewing every pending path.
-# 2026-09-01: switched to 2023_new_interp_recheck_list.csv -- CVB_20230516 (the
-# stale-artifact fix, see project_2023_recheck_batch_resolved memory) plus the 9
-# newly-interpolated 2023-list surveys, all now through stage 7 and ready for path
-# review. The original 12-survey odd-status list is fully resolved.
-RESTRICT_TO_SURVEY_LIST_FILE = SCRIPT_DIR / "2023_new_interp_recheck_list.csv"
+# Temporary: restrict the review queue to only survey_ids on a given list. Same idea as
+# 6_review_surveys.py's own RESTRICT_TO_SURVEY_LIST_FILE. The 2023 recheck batch this was
+# last pointed at is done (see project_2023_recheck_batch_resolved memory) and its
+# scratch list file is gone, so this is back to None -- reviewing every pending path.
+RESTRICT_TO_SURVEY_LIST_FILE = None
 
 # Temporary, one-off recheck (2026-08-31): Molly wants to re-look at every 2022-list
 # survey whose through-width came back 0 -- including ones she already clicked Confirm

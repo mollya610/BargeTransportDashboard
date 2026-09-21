@@ -162,16 +162,13 @@ SIGN_FLIP_LOG_FILE = REPO_ROOT / "sign_flipped_surveys.csv"
 NAVIGABLE_WIDTH_DIR = SCRIPT_DIR / "data" / "NavigableWidth"
 WIDTH_BY_STAGE_DIR = SCRIPT_DIR / "data" / "WidthByStage"
 
-# Temporary: restrict the review queue to only the surveys on this list that are still
-# missing stage 7 (NavigableWidth transects) or stage 8 (WidthByStage) output -- Molly
-# only wants her 2023 channel-width selection showing here right now, nothing else
-# (switched from the 2022 list 2026-08-31 once that pass was done). Set to None to go
-# back to reviewing every confirmed=="no" survey.
-# 2026-09-01: switched to a 9-survey scratch list -- the 2023-list surveys Molly just
-# had interpolated to blob pathway after the 2023 odd-status recheck batch (see
-# project_2023_recheck_batch_resolved memory), all need an orientation pick + sign-
-# check. Switch back to the full 2022 or 2023 list once she's done here.
-RESTRICT_TO_SURVEY_LIST_FILE = SCRIPT_DIR / "2023_new_interp_recheck_list.csv"
+# Temporary: restrict the review queue to only the surveys on a given list that are
+# still missing stage 7 (NavigableWidth transects) or stage 8 (WidthByStage) output.
+# The 2023 recheck batch this was last pointed at is done (see
+# project_2023_recheck_batch_resolved memory) and its scratch list file is gone, so
+# this is back to None -- reviewing every confirmed=="no" survey, i.e. the daily
+# pipeline's actual pending queue.
+RESTRICT_TO_SURVEY_LIST_FILE = None
 
 # "Original" (bare width-vs-height auto-detect) replaced 2026-08-31 with two explicit
 # variants -- same hill-climbing behavior, but the reviewer picks the starting line by
