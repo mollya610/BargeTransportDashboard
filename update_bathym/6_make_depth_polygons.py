@@ -1,5 +1,5 @@
 """
-Stage 9: generate per-survey depth-bin polygon files.
+Stage 6: generate per-survey depth-bin polygon files.
 
 For each survey gpkg in NAVD88Files/, computes depth under the Low Water Reference
 Plane (LWRP) at every survey point, bins each point to its nearest whole foot of depth,
@@ -14,14 +14,12 @@ The coarse "<5 ft / 5-9 ft / ..." bands users actually see are applied later, in
 make_combined_depth_polygons.py's DISPLAY_BINS, after that shift.
 
 Run after 3_process_surveys.py (and optionally 4_compute_thresh_depth.py). Gates only on
-confirmed=="yes" -- no longer waits on 7_compute_navigable_width.py /
-7b_review_navigable_path.py's path_confirmed (navigable-width/risk classification is
-handled separately now). Deletes each survey's raw NAVD88Files/SurveyPointLayers gpkg
-once its polygons are written, so run 7/8 first if you still want width/risk data out of
-this particular gpkg -- once this stage runs, that raw data is gone:
+confirmed=="yes", set by 5_review_surveys.py's sign check. Deletes each survey's raw
+NAVD88Files/SurveyPointLayers gpkg once its polygons are written -- once this stage
+runs, that raw data is gone:
 
     1_check_for_surveys.py -> 2_read_in_surveys.py -> 3_process_surveys.py ->
-    4_compute_thresh_depth.py -> 9_make_depth_polygons.py
+    4_compute_thresh_depth.py -> 5_review_surveys.py (manual) -> 6_make_depth_polygons.py
 
 Re-runs are safe: already-processed surveys are skipped.
 """
@@ -39,9 +37,9 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent
 DATA_DIR = SCRIPT_DIR / "data"
 NAVD88_DIR = DATA_DIR / "NAVD88Files"
-# 6_review_surveys.py's point-exclusion sidecars (7/8-only, see that script's module
-# docstring) -- this stage never reads from here (depth polygons always use every
-# point), but owns cleaning it up once a survey's raw files are deleted below.
+# leftover point-exclusion sidecars from the retired path/width-finding stages -- this
+# stage never reads from here (depth polygons always use every point), but owns
+# cleaning up any legacy sidecar once a survey's raw files are deleted below.
 TRIM_DIR = DATA_DIR / "NavigablePathTrims"
 OUT_DIR = DATA_DIR / "DepthPolygons"
 OUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -105,7 +103,7 @@ files = sorted(NAVD88_DIR.glob("*_SurveyPoint.gpkg"))
 already_done = {f.stem.replace("_depth_polygons", "") for f in OUT_DIR.glob("*_depth_polygons.geojson")}
 new_files = [f for f in files if f.name.replace("_SurveyPoint.gpkg", "") not in already_done]
 
-# never delete raw data for a survey that hasn't been through 6_review_surveys.py yet
+# never delete raw data for a survey that hasn't been through 5_review_surveys.py yet
 # (its sign-flip check) -- this stage's gpkg deletion is one-way.
 if CLEAN_BATHYMETRY_FILE.exists():
     bathym_fixed = pd.read_csv(CLEAN_BATHYMETRY_FILE)

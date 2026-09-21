@@ -127,7 +127,7 @@ for fpath in new_files:
         "milemarker": milemarker,
         "water_elev": water_elev,
         "geometry": poly_tosave.wkt,
-        # Manual review (6_review_surveys.py) is back, but narrowed to just one job: catch
+        # Manual review (5_review_surveys.py) is back, but narrowed to just one job: catch
         # a survey with an inverted Z_navd88 sign before anything downstream trusts its
         # depth_ft. Risk classification is NOT part of that review anymore -- at_risk stays
         # blank; 7_compute_navigable_width.py's vessel_path_connected/width_ft drives the
