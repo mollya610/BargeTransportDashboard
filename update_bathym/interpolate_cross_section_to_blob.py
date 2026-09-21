@@ -60,7 +60,7 @@ from shapely.prepared import prep
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import importlib
-_stage7 = importlib.import_module("7_compute_navigable_width")
+_stage7 = importlib.import_module("OLD_compute_navigable_width")
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent

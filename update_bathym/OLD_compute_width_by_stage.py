@@ -31,15 +31,15 @@ sidecar for this survey_id there, it's read instead, so this stage measures the 
 trimmed point set 7 did rather than re-including whatever a human excluded). Gated on
 confirmed=="yes" for the same reason 7_compute_navigable_width.py
 is (see its module docstring): a sign-flipped survey's depth_ft is meaningless until
-6_review_surveys.py catches it. Also gated on path_confirmed=="yes" -- 7's own output
-lands in _pending columns, invisible to the live map, until a human reviews it in
-7b_review_navigable_path.py; this stage shouldn't build a stage-by-stage width table off
-a path nobody's looked at either.
+6_review_surveys.py catches it. No longer gated on path_confirmed=="yes" --
+7b_review_navigable_path.py's manual review step isn't part of the workflow anymore.
+
+RETIRED (2026-09-21): this stage is no longer part of the active pipeline. Kept here as
+a reference copy; renamed from 8_compute_width_by_stage.py.
 
     1_check_for_surveys.py -> 2_read_in_surveys.py -> 3_process_surveys.py ->
     4_compute_thresh_depth.py -> 6_review_surveys.py (manual) ->
-    7_compute_navigable_width.py -> 7b_review_navigable_path.py (manual) ->
-    8_compute_width_by_stage.py -> 9_make_depth_polygons.py
+    9_make_depth_polygons.py
 
 Every step compute_survey_vessel_path runs is deterministic (fixed-seed sampling, no
 randomness tied to run order or wall-clock time), so calling it again here on the same
@@ -79,7 +79,7 @@ from importlib import import_module
 
 import width_blob
 
-_stage7 = import_module("7_compute_navigable_width")
+_stage7 = import_module("OLD_compute_navigable_width")
 
 # ── CONFIG ────────────────────────────────────────────────────────────────────
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -173,16 +173,12 @@ def main():
 
     # same dependency as 7_compute_navigable_width.py's own gate (see module docstring):
     # a sign-flipped survey's depth_ft is inverted until 6_review_surveys.py catches it,
-    # so this can't run ahead of that check either. Also gated on path_confirmed=="yes"
-    # -- a human must have looked at 7's path in 7b_review_navigable_path.py first (that
-    # script copies its result into the live vessel_path_* columns and sets
-    # path_confirmed="yes" once confirmed); this stage has no way to tell whether a
-    # given path was ever actually reviewed otherwise.
+    # so this can't run ahead of that check either. No longer gated on path_confirmed==
+    # "yes" -- 7b_review_navigable_path.py's manual review step isn't part of the
+    # workflow anymore.
     bathym_fixed = pd.read_csv(REPO_ROOT / "bathym_fixed.csv") if (REPO_ROOT / "bathym_fixed.csv").exists() else None
     if bathym_fixed is not None:
         confirmed_files = set(bathym_fixed.loc[bathym_fixed["confirmed"] == "yes", "file"])
-        path_confirmed_files = set(bathym_fixed.loc[bathym_fixed["path_confirmed"] == "yes", "file"]) \
-            if "path_confirmed" in bathym_fixed.columns else set()
         # the human-confirmed path's method (possibly swapped from 7's own default pick)
         # -- passed to compute_survey_vessel_path as preferred_method so this stage
         # reproduces the SAME path a person actually looked at, not whatever 7's
@@ -204,7 +200,6 @@ def main():
         through_width_by_file = dict(zip(bathym_fixed["file"], bathym_fixed.get("vessel_path_width_ft")))
     else:
         confirmed_files = set()
-        path_confirmed_files = set()
         preferred_method_by_file = {}
         blob_mode_by_file = {}
         polyline_by_file = {}
@@ -213,14 +208,9 @@ def main():
     todo = [f for f in files if not already_done(f.name.replace("_SurveyPoint.gpkg", ""))]
     not_yet_confirmed = [f for f in todo if f.name not in confirmed_files]
     todo = [f for f in todo if f.name in confirmed_files]
-    not_yet_path_confirmed = [f for f in todo if f.name not in path_confirmed_files]
-    todo = [f for f in todo if f.name in path_confirmed_files]
     if not_yet_confirmed:
         print(f"{len(not_yet_confirmed)} survey(s) skipped, not confirmed=yes in bathym_fixed.csv "
               f"(run 6_review_surveys.py first)")
-    if not_yet_path_confirmed:
-        print(f"{len(not_yet_path_confirmed)} survey(s) skipped, path not confirmed in bathym_fixed.csv "
-              f"(run 7b_review_navigable_path.py first)")
     print(f"{len(todo)} survey(s) to process ({len(files)} total in NAVD88Files)")
 
     for fpath in todo:

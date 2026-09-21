@@ -51,7 +51,7 @@ from dash import Dash, dcc, html, Input, Output, State, no_update
 from shapely.geometry import box, LineString, Point
 
 import width_blob
-_stage7 = import_module("7_compute_navigable_width")
+_stage7 = import_module("OLD_compute_navigable_width")
 
 # ---------------- CONFIG ----------------
 SCRIPT_DIR = Path(__file__).resolve().parent

@@ -35,7 +35,7 @@ from shapely.geometry import LineString, Point
 
 import width_blob
 from importlib import import_module
-_stage7 = import_module("7_compute_navigable_width")
+_stage7 = import_module("OLD_compute_navigable_width")
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent

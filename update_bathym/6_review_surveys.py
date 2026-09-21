@@ -131,7 +131,7 @@ from shapely.geometry import Point
 # module name isn't a valid identifier -- reused the same import_module pattern
 # 8_compute_width_by_stage.py already uses for the same reason. Only nearest_mile is
 # used from it, for the Split feature's per-chunk milemarker recompute (item 5 above).
-_stage7 = import_module("7_compute_navigable_width")
+_stage7 = import_module("OLD_compute_navigable_width")
 
 # ---------------- CONFIG ----------------
 SCRIPT_DIR = Path(__file__).resolve().parent
