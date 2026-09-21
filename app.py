@@ -700,6 +700,62 @@ def _assign_display_bin(depth):
     return None
 
 
+# HistoricDepthPolygons (2015-2020, see update_bathym/build_historic_survey_data.py)
+# keeps its own fine 5ft-range bin label (e.g. "5-10 ft") on hover instead of being
+# re-bucketed into DEPTH_POLY_COLORS' coarse bands, so its labels won't be direct keys
+# into that dict. A survey's full depth range can be much narrower than the 5-20+ ft
+# span DEPTH_POLY_COLORS' fixed thresholds cover (or well outside it, since historic
+# depth is relative to LWRP and can run negative), which would flatten most of a
+# survey's bins to one or two colors -- so instead each survey gets its own gradient,
+# stretched (deepest -> shallowest) across the same blue-to-red palette DEPTH_POLY_COLORS
+# uses, scaled to that survey's own min/max depth rather than the fixed thresholds.
+_HISTORIC_BIN_RANGE_RE = re.compile(r"^(-?\d+(?:\.\d+)?)-(-?\d+(?:\.\d+)?) ft$")
+_DEPTH_GRADIENT_STOPS = [DEPTH_POLY_COLORS[label] for _, _, label in _DISPLAY_BINS]  # deep -> shallow
+
+
+def _lerp_hex(c1, c2, t):
+    r1, g1, b1 = int(c1[1:3], 16), int(c1[3:5], 16), int(c1[5:7], 16)
+    r2, g2, b2 = int(c2[1:3], 16), int(c2[3:5], 16), int(c2[5:7], 16)
+    r = round(r1 + (r2 - r1) * t)
+    g = round(g1 + (g2 - g1) * t)
+    b = round(b1 + (b2 - b1) * t)
+    return f"#{r:02x}{g:02x}{b:02x}"
+
+
+def _gradient_color(t, stops=_DEPTH_GRADIENT_STOPS):
+    """t=0 -> stops[0] (deepest/blue), t=1 -> stops[-1] (shallowest/red)."""
+    t = min(max(t, 0.0), 1.0)
+    n = len(stops) - 1
+    seg = min(int(t * n), n - 1)
+    return _lerp_hex(stops[seg], stops[seg + 1], t * n - seg)
+
+
+def _bin_colors_for_survey(bins):
+    """{bin_label: color} for one survey's own fine-range bins (see module comment
+    above), scaled to that survey's own min/max depth -- or None if bins aren't in that
+    format (e.g. already-coarse-bucketed 2021+ surveys, or the combined multi-survey
+    layers), signaling the caller should use DEPTH_POLY_COLORS' fixed colors instead."""
+    parsed = []
+    for bin_label, _, _ in bins:
+        m = _HISTORIC_BIN_RANGE_RE.match(str(bin_label))
+        if not m:
+            return None
+        parsed.append((bin_label, (float(m.group(1)) + float(m.group(2))) / 2))
+    if not parsed:
+        return None
+    depths = [d for _, d in parsed]
+    dmin, dmax = min(depths), max(depths)
+    span = dmax - dmin
+    return {
+        label: _gradient_color(0.5 if span == 0 else (dmax - depth) / span)
+        for label, depth in parsed
+    }
+
+
+def _depth_bin_color(bin_label, color_map):
+    return (color_map or {}).get(bin_label) or DEPTH_POLY_COLORS.get(bin_label, "#888888")
+
+
 def _geom_to_lonlat(geom):
     """Convert a shapely Polygon or MultiPolygon to parallel lon/lat lists for Scattermap fill."""
     lons, lats = [], []
@@ -750,8 +806,9 @@ def _add_depth_polygon_bin_traces(fig, bins):
     Shared by every depth-polygon overlay -- the "River Depth" layer, the historic
     low-water polygon layer, and (formerly) the single clicked-survey overlay -- so
     they all render with identical styling."""
+    color_map = _bin_colors_for_survey(bins)
     for bin_label, lons, lats in bins:
-        color = DEPTH_POLY_COLORS.get(bin_label, "#888888")
+        color = _depth_bin_color(bin_label, color_map)
         fig.add_trace(go.Scattermap(
             lon=lons,
             lat=lats,

@@ -12,6 +12,7 @@ Run on a separate port so both can be open at once:
 """
 import os
 import textwrap
+from pathlib import Path
 
 import dash
 from dash import dcc, html, Input, Output, State
@@ -97,6 +98,27 @@ DEPTH_POLY_FILES = {
     f.stem.replace("_depth_polygons", "")
     for f in base._DEPTH_POLY_DIR.glob("*_depth_polygons.geojson")
 } if base._DEPTH_POLY_DIR.exists() else set()
+
+# 2015-2020 surveys (pre-dates bathym_fixed.csv / the confirmed/risk-tier pipeline --
+# see build_historic_survey_data.py) -- survey_id/year/date/lat/lon plus a milemarker
+# column added by that script so these dots can be bucketed to a gage region exactly
+# like 2021+ surveys are. No risk classification exists for these, so they're all
+# plotted as a single "Historic Survey" bin instead of the Low/Medium/High risk bins.
+_HISTORIC_CSV = Path("update_bathym/HistoricDepthPolygons/historic_surveys_combined.csv")
+if _HISTORIC_CSV.exists():
+    historic_bathy = pd.read_csv(_HISTORIC_CSV)
+    HISTORIC_YEARS = sorted(historic_bathy["year"].unique().tolist())
+else:
+    historic_bathy = pd.DataFrame(columns=["survey_id", "year", "date", "lat", "lon", "milemarker"])
+    HISTORIC_YEARS = []
+
+
+def _gage_info(m):
+    if m >= 951:
+        return "St. Louis", -3, "St. Louis gage is at -3ft"
+    if m >= 580:
+        return "Memphis", -10, "Memphis gage is at -10ft"
+    return "Greenville", 7, "Greenville gage is at 7ft"
 
 RISK_BINS = [
     ("Low Risk", "#2e7d32", 9),
@@ -358,8 +380,10 @@ app.layout = html.Div(
                                             id="year-slider",
                                             # base.years excludes the current (in-progress) year --
                                             # this secondary app is for identifying individual
-                                            # surveys, so include it too, unlike Historic Conditions
-                                            options=[{"label": str(y), "value": y} for y in base.years + [base.thisyear]],
+                                            # surveys, so include it too, unlike Historic Conditions.
+                                            # HISTORIC_YEARS (2015-2020, pre-dates bathym_fixed.csv)
+                                            # goes in front, oldest first.
+                                            options=[{"label": str(y), "value": y} for y in HISTORIC_YEARS + base.years + [base.thisyear]],
                                             value=base.DEFAULT_HISTORIC_YEAR,
                                             clearable=False,
                                             style={"height": "40px", "font-size": "15px"},
@@ -409,6 +433,8 @@ def update_map(year, layers, selected_survey, selected_shoaling_mile):
     # only show surveys that have a depth-polygon file -- clicking a dot with none does
     # nothing (see handle_survey_click), which reads as broken, so don't plot it at all
     df_b = df_b[df_b["survey_id"].isin(DEPTH_POLY_FILES)]
+    df_hist = historic_bathy[historic_bathy["year"] == year]
+    df_hist = df_hist[df_hist["survey_id"].isin(DEPTH_POLY_FILES)]
     # hide the dot for whichever survey is currently showing its polygon overlay, but if
     # it's High risk, keep its marker up (faded) at the problem point so it's not lost
     # under the polygon
@@ -416,6 +442,7 @@ def update_map(year, layers, selected_survey, selected_shoaling_mile):
     if selected_survey:
         sid = selected_survey.get("survey_id")
         df_b = df_b[df_b["survey_id"] != sid]
+        df_hist = df_hist[df_hist["survey_id"] != sid]
         match = bathy[(bathy["survey_id"] == sid) & (bathy["at_risk_eff"] == "high")]
         if not match.empty:
             selected_at_risk_row = match.iloc[0]
@@ -490,19 +517,39 @@ def update_map(year, layers, selected_survey, selected_shoaling_mile):
 
     icon_layers = []
 
-    if "bathy" in layers:
+    if "bathy" in layers and year in HISTORIC_YEARS:
+        # 2015-2020: no bathym_fixed.csv risk classification exists for these, so every
+        # dot is plotted the same way (green), unlike the Low/Medium/High risk bins below
+        df_bin = df_hist.copy()
+        if not df_bin.empty:
+            df_bin["date_fmt"] = pd.to_datetime(df_bin["date"]).dt.strftime("%B %-d, %Y")
+            df_bin["click_hint"] = "<i>Click for depth map and details</i>"
+            df_bin["depth"] = np.nan
+            gage_info = df_bin["milemarker"].apply(_gage_info)
+            df_bin["gage_name"] = gage_info.apply(lambda t: t[0])
+            df_bin["gage_value"] = gage_info.apply(lambda t: t[1])
+            df_bin["gage_label"] = gage_info.apply(lambda t: t[2])
+            df_bin["gage_uncertainty"] = df_bin["milemarker"].apply(base._uncertainty_for_mile)
+            custom = df_bin[["date_fmt", "depth", "survey_id", "click_hint", "gage_label", "gage_name", "gage_value", "gage_uncertainty"]].copy()
+            custom.insert(0, "_type", "bathy")
+            fig.add_trace(go.Scattermap(
+                lon=df_bin["lon"], lat=df_bin["lat"], mode="markers",
+                marker=dict(size=9, color="#2e7d32"),
+                showlegend=True, legendgroup="depth_survey",
+                legendgrouptitle_text="Survey Locations",
+                legendrank=10, customdata=custom.values, name="Historic Survey",
+                hovertemplate=(
+                    "<b><span style='font-size:16px'>Riverbed Survey</span></b><br>"
+                    "<span style='font-size:14px'>%{customdata[1]}</span><br>"
+                    "%{customdata[4]}<extra></extra>"
+                )
+            ))
+    elif "bathy" in layers:
         risk_masks = {
             "Low Risk": df_b["at_risk_eff"] == "low",
             "Medium Risk": df_b["at_risk_eff"] == "medium",
             "High Risk": df_b["at_risk_eff"] == "high",
         }
-
-        def _gage_info(m):
-            if m >= 951:
-                return "St. Louis", -3, "St. Louis gage is at -3ft"
-            if m >= 580:
-                return "Memphis", -10, "Memphis gage is at -10ft"
-            return "Greenville", 7, "Greenville gage is at 7ft"
 
         for label, color, size in RISK_BINS:
             df_bin = df_b[risk_masks[label]].copy()
@@ -927,6 +974,18 @@ def render_survey_legend(data):
             style={"font-size": "11px", "font-style": "italic", "color": "#666", "margin-top": "4px"},
         ),
     ], style={"margin-bottom": "10px"})
+    # Historic (2015-2020) surveys render with their own per-survey depth gradient
+    # (see base._bin_colors_for_survey) instead of the fixed DEPTH_POLY_COLORS bands,
+    # so the legend shows that survey's actual bins/colors rather than the static
+    # 6-row legend, which would otherwise no longer match what's on the map.
+    legend_pairs = list(base.DEPTH_POLY_COLORS.items())
+    sid = data.get("survey_id", "")
+    poly_path = base._DEPTH_POLY_DIR / f"{sid}_depth_polygons.geojson"
+    if poly_path.exists():
+        bins = base._load_depth_polygon_bins(str(poly_path))
+        color_map = base._bin_colors_for_survey(bins)
+        if color_map:
+            legend_pairs = [(bin_label, color_map[bin_label]) for bin_label, _, _ in bins]
     rows = [
         html.Div(
             style={"display": "flex", "align-items": "center", "margin-bottom": "5px"},
@@ -938,7 +997,7 @@ def render_survey_legend(data):
                 html.Span(bin_label, style={"font-size": "12px", "margin-left": "8px"}),
             ]
         )
-        for bin_label, color in base.DEPTH_POLY_COLORS.items()
+        for bin_label, color in legend_pairs
     ]
     n_rows = len(rows) // 2 + len(rows) % 2
     rows_grid = html.Div(
