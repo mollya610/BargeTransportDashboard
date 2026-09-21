@@ -621,7 +621,7 @@ def _wrap_two_lines(text):
 # --------------------------------------------------
 
 app = dash.Dash(__name__)
-app.title = "Grain Transportation Conditions"
+app.title = "Mississippi River Grain Transportation"
 server = app.server
 app.index_string = """
 <!DOCTYPE html>
@@ -1780,7 +1780,7 @@ app.layout = html.Div(
             },
             children=[
                 html.H2(
-                    "Grain Transportation Conditions",
+                    "Mississippi River Grain Transportation",
                     id="app-title",
                     style={
                         "margin": "0 0 0 30px", "color": "white",
