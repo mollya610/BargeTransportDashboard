@@ -599,22 +599,17 @@ def _nearest_mile_lonlat(river_name, mile):
     return row["LON"], row["LAT"]
 
 
-def _wrap_two_lines(text):
-    text = str(text)
-    if len(text) <= 40:
+def _wrap_by_sentence(text):
+    text = str(text).strip()
+    sentences = [s.strip() for s in text.split(".") if s.strip()]
+    if not sentences:
         return text
-    mid = len(text) // 2
-    left_space = text.rfind(" ", 0, mid)
-    right_space = text.find(" ", mid)
-    if left_space == -1 and right_space == -1:
-        split_at = mid
-    elif left_space == -1:
-        split_at = right_space
-    elif right_space == -1:
-        split_at = left_space
-    else:
-        split_at = left_space if (mid - left_space) <= (right_space - mid) else right_space
-    return text[:split_at] + "<br>" + text[split_at + 1:]
+    parts = [s + "." for s in sentences[:-1]]
+    parts.append(sentences[-1] + "." if text.endswith(".") else sentences[-1])
+    # call out the draft-depth line (always the first sentence) with a slightly larger font
+    if "draft" in parts[0].lower():
+        parts[0] = f'<span style="font-size:15px">{parts[0]}</span>'
+    return "<br>".join(parts)
 
 # --------------------------------------------------
 # DASH APP
@@ -2635,14 +2630,16 @@ def update_map(year, layers_cc, layers_full, selected_shoaling_mile, cc_mode, de
             # repeated per point so a click on any part of the line carries the full memo
             full_memo = row["full_memo"] if pd.notna(row["full_memo"]) else ""
             customdata = [["draft", full_memo]] * len(seg_lons)
-            northbound = _wrap_two_lines(row["northbound"]) if pd.notna(row["northbound"]) else "—"
-            southbound = "<br>".join(textwrap.wrap(str(row["southbound"]), width=35)) if pd.notna(row["southbound"]) else "—"
+            northbound = _wrap_by_sentence(row["northbound"]) if pd.notna(row["northbound"]) else "—"
+            southbound = _wrap_by_sentence(row["southbound"]) if pd.notna(row["southbound"]) else "—"
             hovertext = (
                 f"<b>{header}</b><br>"
                 f"{row['mm_label']}<br>"
                 f"Start: {date_start_str or '—'}<br>"
-                f"Southbound: {southbound}<br>"
-                f"Northbound: {northbound}<br>"
+                f"<b>Southbound:</b><br>"
+                f"{southbound}<br>"
+                f"<b>Northbound:</b><br>"
+                f"{northbound}<br>"
                 f"<i>Click for full USCG Memo</i>"
             )
 
