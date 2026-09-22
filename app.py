@@ -1629,18 +1629,22 @@ def _river_depth_tooltip_description():
     ]
 
 
-# Historic Conditions' page-purpose heading above the legend -- 20px sits between the
-# "Select Year" label (browser-default ~16px) and the 24px app title.
+# Historic Conditions' page-purpose heading above the legend -- 18px sits between the
+# "Select Year" label (browser-default ~16px) and the 24px app title. Kept to one line
+# on a translucent rounded box so it reads as a banner over the map.
 HISTORIC_PURPOSE_HEADING_STYLE = {
     "font-family": "'DM Sans', sans-serif",
-    "font-size": "20px",
+    "font-size": "18px",
     "font-weight": "700",
     "color": "black",
     "text-shadow": (
         "-1px -1px 0 white, 1px -1px 0 white, -1px 1px 0 white, 1px 1px 0 white, "
         "0 -1px 0 white, 0 1px 0 white, -1px 0 0 white, 1px 0 0 white"
     ),
-    "max-width": "420px",
+    "white-space": "nowrap",
+    "background": "rgba(255,255,255,0.6)",
+    "border-radius": "8px",
+    "padding": "4px 10px",
 }
 
 

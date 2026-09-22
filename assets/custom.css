@@ -182,7 +182,8 @@ body.app-loaded .map-spinner {
     }
     #historic-purpose-heading {
         font-size: 15px !important;
-        max-width: 58vw !important;
+        max-width: 78vw !important;
+        white-space: normal !important;
     }
 
     /* Floating detail panels (notice/survey/gage click-throughs) are sized in
