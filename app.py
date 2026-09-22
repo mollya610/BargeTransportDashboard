@@ -1602,6 +1602,60 @@ _soybean_futures_fig = build_futures_chart("soybean")
 _compare_years_fig = build_compare_years_fig(build_compare_years_data())
 _barge_rate_placeholder_fig = build_barge_rate_placeholder_fig()
 
+# River Depth '?' tooltip -- shared by the Historic Conditions and Current Conditions
+# legends so both tabs explain the layer the same way. A function, not a constant, since
+# a Dash component can't be placed in the layout twice.
+RIVER_DEPTH_TOOLTIP_SOURCES = ["U.S. Army Corps of Engineers eHydro", "NOAA National Weather Service"]
+
+
+def _river_depth_tooltip_description():
+    return [
+        html.Span(
+            "USACE eHydro survey data provides the elevation of the "
+            "riverbed. NOAA stage data provides the elevation of the "
+            "river surface.",
+            style={"display": "block", "margin-bottom": "6px"},
+        ),
+        html.Span(
+            "River Depth = River Surface Elevation - Riverbed Elevation.",
+            style={"display": "block", "margin-bottom": "6px"},
+        ),
+        html.Span(
+            "A 9ft deep navigation channel is necessary for barge "
+            "navigation. The \"Constraining Points\" show locations "
+            "where the 9ft navigation channel is limited.",
+            style={"display": "block"},
+        ),
+    ]
+
+
+# Historic Conditions' page-purpose heading above the legend -- 20px sits between the
+# "Select Year" label (browser-default ~16px) and the 24px app title.
+HISTORIC_PURPOSE_HEADING_STYLE = {
+    "font-family": "'DM Sans', sans-serif",
+    "font-size": "20px",
+    "font-weight": "700",
+    "color": "black",
+    "text-shadow": (
+        "-1px -1px 0 white, 1px -1px 0 white, -1px 1px 0 white, 1px 1px 0 white, "
+        "0 -1px 0 white, 0 1px 0 white, -1px 0 0 white, 1px 0 0 white"
+    ),
+    "max-width": "420px",
+}
+
+
+# Historic Conditions' note box under the legend -- same card style as map-controls
+HISTORIC_YEAR_NOTE_STYLE = {
+    "background": "rgba(255,255,255,0.9)",
+    "padding": "10px 15px",
+    "border-radius": "8px",
+    "box-shadow": "0 1px 4px rgba(0,0,0,0.3)",
+    "font-family": "'DM Sans', sans-serif",
+    "font-size": "14px",
+    "max-width": "240px",
+}
+
+
 # Full 5-layer legend, shown on the "Riverbed Surveys" tab
 FULL_LAYER_OPTIONS = [
     {
@@ -1618,31 +1672,9 @@ FULL_LAYER_OPTIONS = [
                         }),
                         html.Span("River Depth", style={"font-size": "14px", "font-weight": "bold"}),
                         _layer_info_icon(
-                            "U.S. Army Corps of Engineers eHydro",
-                            [
-                                html.Span(
-                                    "Hydrographic surveys (“riverbed surveys”) "
-                                    "measure the elevation of the riverbed. We combine "
-                                    "every confirmed survey from the selected year to "
-                                    "estimate how shallow the channel actually got that "
-                                    "year, at that year's real lowest river stage.",
-                                    style={"display": "block", "margin-bottom": "6px"},
-                                ),
-                                html.Span(
-                                    "Shaded from deep (blue) to shallow (red) -- see "
-                                    "the color key below.",
-                                    style={"display": "block", "margin-bottom": "6px"},
-                                ),
-                                html.Span(
-                                    "Constraining points along that year's channel are also "
-                                    "marked: the warning icon is Not Navigable (continuous "
-                                    "9ft-deep water narrower than 300ft, same as Current "
-                                    "Conditions), the orange dot Reduced Navigability (300-800ft "
-                                    "wide).",
-                                    style={"display": "block"},
-                                ),
-                            ],
-                            wide=True,
+                            RIVER_DEPTH_TOOLTIP_SOURCES,
+                            _river_depth_tooltip_description(),
+                            wide="xwide",
                         ),
                     ],
                 ),
@@ -1795,25 +1827,8 @@ CC_LAYER_OPTIONS = [
                 }),
                 "River Depth",
                 None,
-                ["U.S. Army Corps of Engineers eHydro", "NOAA National Weather Service"],
-                [
-                    html.Span(
-                        "USACE eHydro survey data provides the elevation of the "
-                        "riverbed. NOAA stage data provides the elevation of the "
-                        "river surface.",
-                        style={"display": "block", "margin-bottom": "6px"},
-                    ),
-                    html.Span(
-                        "River Depth = River Surface Elevation - Riverbed Elevation.",
-                        style={"display": "block", "margin-bottom": "6px"},
-                    ),
-                    html.Span(
-                        "A 9ft deep navigation channel is necessary for barge "
-                        "navigation. The \"Constraining Points\" show locations "
-                        "where the 9ft navigation channel is limited.",
-                        style={"display": "block"},
-                    ),
-                ],
+                RIVER_DEPTH_TOOLTIP_SOURCES,
+                _river_depth_tooltip_description(),
                 tooltip_wide="xwide",
             ),
             html.Span(
@@ -2136,6 +2151,15 @@ app.layout = html.Div(
                         "gap": "10px",
                     },
                     children=[
+                        # Historic Conditions page-purpose heading, floating on the map above
+                        # the legend -- white text-shadow outline keeps the black text legible
+                        # over the basemap. Hidden on Current Conditions (see
+                        # sync_cc_mode_controls).
+                        html.Div(
+                            "How constrained has the Mississippi River been in past years?",
+                            id="historic-purpose-heading",
+                            style={**HISTORIC_PURPOSE_HEADING_STYLE, "display": "none"},
+                        ),
                         html.Div(
                             id="map-controls",
                             style={
@@ -2201,6 +2225,14 @@ app.layout = html.Div(
                                     ]
                                 ),
                             ]
+                        ),
+
+                        # Historic Conditions note under the legend, spelling out what the
+                        # map is showing for the selected year -- filled/shown by
+                        # update_historic_year_note.
+                        html.Div(
+                            id="historic-year-note",
+                            style={**HISTORIC_YEAR_NOTE_STYLE, "display": "none"},
                         ),
 
                         # River depth scenario toggle -- CC-only and only when the River
@@ -2725,6 +2757,7 @@ def toggle_top_level_page(cc_clicks, river_clicks, demand_clicks, about_clicks):
     Output("layer-toggle-full", "style"),
     Output("year-select-wrapper", "style"),
     Output("year-slider", "value"),
+    Output("historic-purpose-heading", "style"),
     Input("cc-mode-store", "data"),
 )
 def sync_cc_mode_controls(cc_mode):
@@ -2734,12 +2767,36 @@ def sync_cc_mode_controls(cc_mode):
             {"display": "none"},
             {"width": "220px", "display": "none"},
             thisyear,
+            {**HISTORIC_PURPOSE_HEADING_STYLE, "display": "none"},
         )
     return (
         {"display": "none"},
         {"display": "block"},
         {"width": "220px", "display": "block"},
         DEFAULT_HISTORIC_YEAR,
+        HISTORIC_PURPOSE_HEADING_STYLE,
+    )
+
+
+@app.callback(
+    Output("historic-year-note", "children"),
+    Output("historic-year-note", "style"),
+    Input("cc-mode-store", "data"),
+    Input("year-slider", "value"),
+)
+def update_historic_year_note(cc_mode, year):
+    if cc_mode or year is None:
+        return None, {**HISTORIC_YEAR_NOTE_STYLE, "display": "none"}
+    year_span = lambda: html.Span(str(year), style={"color": "#2166ac", "font-weight": "bold"})
+    return (
+        [
+            "Map shows river depth during the minimum stage of ",
+            year_span(),
+            " based on riverbed surveys taken in ",
+            year_span(),
+            " only",
+        ],
+        HISTORIC_YEAR_NOTE_STYLE,
     )
 
 

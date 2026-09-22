@@ -174,8 +174,15 @@ body.app-loaded .map-spinner {
         max-height: 42vh !important;
         overflow-y: auto;
     }
+    #historic-year-note {
+        max-width: 58vw !important;
+    }
     #year-select-wrapper, #layer-toggle-wrapper {
         width: 100% !important;
+    }
+    #historic-purpose-heading {
+        font-size: 15px !important;
+        max-width: 58vw !important;
     }
 
     /* Floating detail panels (notice/survey/gage click-throughs) are sized in
