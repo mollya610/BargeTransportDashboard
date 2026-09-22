@@ -4,7 +4,12 @@
    update_map (its "figure" callback) is running; this rule just reacts to that
    attribute with a sibling-selector, no callback or JS of its own needed.
    Deliberately NOT a full-screen dimmer/backdrop -- just the circle itself, so
-   the map underneath stays visible instead of blanking out. */
+   the map underneath stays visible instead of blanking out.
+   Defaults to black because the very first time it shows -- the initial page
+   load -- the map hasn't rendered yet, so the spinner sits on the plain white
+   page background where a white spinner is invisible. assets/loading_spinner.js
+   adds "app-loaded" to <body> the first time that initial load finishes, which
+   flips it back to white for every load after that (map tiles behind it by then). */
 .map-spinner {
     display: none;
     position: absolute;
@@ -14,11 +19,16 @@
     height: 44px;
     margin: -22px 0 0 -22px;
     border-radius: 50%;
-    border: 4px solid rgba(255, 255, 255, 0.35);
-    border-top-color: #fff;
+    border: 4px solid rgba(0, 0, 0, 0.35);
+    border-top-color: #000;
     z-index: 2000;
     pointer-events: none;
     animation: map-spinner-rotate 0.8s linear infinite;
+}
+
+body.app-loaded .map-spinner {
+    border-color: rgba(255, 255, 255, 0.35);
+    border-top-color: #fff;
 }
 
 #map[data-dash-is-loading="true"] ~ .map-spinner {
