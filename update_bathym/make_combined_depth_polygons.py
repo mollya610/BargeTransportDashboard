@@ -26,6 +26,12 @@ drawn on the map. A year with no target stage (a past year, or the current year 
 "today" and no stage feed is available) is combined at its native LWRP depth --
 0ft offset, still bucketed into DISPLAY_BINS.
 
+As of 2026-09-22, the current year's files are no longer built by combining individual
+surveys here -- Molly maintains a pre-combined river-wide dataset under
+DepthPolygons/<year>/ (see build_current_year_files below) that replaces that per-survey
+combining step for whichever year has that folder. combine_year() (per-survey combining)
+stays as the fallback for any year without one.
+
 Usage: python update_bathym/make_combined_depth_polygons.py [--year YYYY]
 """
 
@@ -285,13 +291,167 @@ def combine_year(year, stage="today", out_suffix=""):
     return out_path
 
 
+# -- Current-year files built from Molly's pre-combined DepthPolygons/<year>/ dataset --
+#
+# Replaces the per-survey combine_year() call for whichever year has this folder
+# (currently 2026 only -- see module docstring). Three pieces live there:
+#   <year>_threshold_1ft_polygon/<year>_threshold_1ft.shp -- every confirmed survey's
+#     depth already combined river-wide at 1ft resolution, at native LWRP depth (same
+#     "Greenville=7ft/Memphis=-10ft" anchors as everywhere else in this file) -- this is
+#     the "current conditions" base layer, still needing today's stage shift + DISPLAY_BINS
+#     bucketing done below (build_current_conditions_polygon), same as combine_year()
+#     used to do per survey.
+#   <year>_low_water_<low_year>_polygon/<year>_low_water_<low_year>.shp -- one of these
+#     per LOW_WATER_YEARS entry, already shifted to that year's historic low-water stage
+#     AND already bucketed into DISPLAY_BINS (depth_rang holds the band label, e.g.
+#     "20+") -- just needs reprojecting/reformatting to match combine_year()'s output
+#     contract (convert_low_water_scenario).
+CURRENT_YEAR_DATA_DIR = REPO_ROOT / "DepthPolygons"
+
+# usace_river_mile_markers.csv's Lower Mississippi points, ~1 per mile -- same table
+# app.py's mile_lookup uses to place things by mile marker. The pre-combined 1ft
+# threshold polygon has no per-point mile/gage attribution (unlike a per-survey file),
+# so this is how build_current_conditions_polygon recovers which anchor gage governs
+# which part of the river: a Voronoi partition of these points (tagged Greenville/
+# Memphis by CONFLUENCE_MILE, same rule as _survey_gage) tiles the whole river with no
+# gaps or overlaps, and each depth-bin polygon gets clipped to whichever region it falls
+# in before its zone's offset is applied.
+RIVER_MILE_MARKERS_FILE = SCRIPT_DIR / "usace_river_mile_markers.csv"
+
+
+def _gage_zone_regions():
+    """{gage_name: UTM polygon} partitioning the Lower Mississippi into the stretch each
+    anchor gage governs (see module note above) -- only Greenville/Memphis, since
+    CURRENT_YEAR_DATA_DIR's dataset is LM-only so far."""
+    import shapely
+    from shapely.geometry import MultiPoint
+    from shapely.ops import voronoi_diagram
+    from shapely.strtree import STRtree
+
+    markers = pd.read_csv(RIVER_MILE_MARKERS_FILE)
+    lo = markers[markers["RIVER_NAME"] == "MISSISSIPPI-LO"].dropna(subset=["LON", "LAT", "MILE"])
+    gdf = gpd.GeoDataFrame(lo, geometry=gpd.points_from_xy(lo["LON"], lo["LAT"]), crs=4326).to_crs(UTM_CRS)
+    gdf["gage"] = gdf["MILE"].apply(lambda m: "Greenville" if m < CONFLUENCE_MILE else "Memphis")
+
+    pts = gdf.geometry.tolist()
+    cells = list(voronoi_diagram(MultiPoint(pts), tolerance=0.0).geoms)
+    # voronoi_diagram doesn't guarantee cells come back in input order -- match each
+    # cell to its generating point instead of assuming positional alignment
+    tree = STRtree(pts)
+    gages = gdf["gage"].tolist()
+    cell_gage = [gages[tree.nearest(c.representative_point())] for c in cells]
+    cell_gdf = gpd.GeoDataFrame({"gage": cell_gage}, geometry=cells, crs=UTM_CRS)
+    regions = cell_gdf.dissolve(by="gage")
+    return dict(zip(regions.index, regions.geometry))
+
+
+def build_current_conditions_polygon(year):
+    """Current-year replacement for combine_year(year) (no stage dict / lowwater
+    suffix): shifts CURRENT_YEAR_DATA_DIR's pre-combined 1ft-resolution threshold
+    polygon to today's actual stage, per gage zone, then buckets into DISPLAY_BINS --
+    the same shift-then-bucket step combine_year did per survey, just against one
+    already-combined base layer instead of iterating every survey. Writes to the same
+    <year>_combined_depth_polygons.geojson combine_year() would have."""
+    src = CURRENT_YEAR_DATA_DIR / str(year) / f"{year}_threshold_1ft_polygon" / f"{year}_threshold_1ft.shp"
+    if not src.exists():
+        print(f"No {src} -- falling back to per-survey combine for {year}.")
+        return combine_year(year)
+
+    today_stage = _load_today_stage()
+    regions = _gage_zone_regions()
+    thr = gpd.read_file(src).to_crs(UTM_CRS)
+    thr["geometry"] = thr.geometry.apply(lambda g: shapely.set_precision(make_valid(g), PRECISION_GRID_M))
+
+    bin_geoms = {}
+    missing_gages = set()
+    for gage, region_geom in regions.items():
+        if gage not in today_stage:
+            missing_gages.add(gage)
+            offset = 0.0
+        else:
+            offset = today_stage[gage] - GAGE_THRESHOLDS[gage]
+        clipped = thr.clip(region_geom)
+        for _, row in clipped.iterrows():
+            geom = make_valid(row.geometry)
+            if geom.is_empty:
+                continue
+            depth_bin = assign_display_bin(row["depth_bin"] + offset)
+            if depth_bin is None:
+                continue
+            bin_geoms.setdefault(depth_bin, []).append(geom)
+
+    if missing_gages:
+        print(f"No current stage reading for {', '.join(sorted(missing_gages))} -- that zone kept at its static LWRP depth.")
+
+    records = []
+    for depth_bin, geoms in bin_geoms.items():
+        merged = _clean_polygonal(unary_union(geoms))
+        if merged is None or merged.is_empty:
+            continue
+        merged = _clean_polygonal(merged.simplify(SIMPLIFY_M), min_area=MIN_ISLAND_AREA_M2)
+        if merged is None or merged.is_empty:
+            continue
+        records.append({"depth_bin": depth_bin, "bin_order": DISPLAY_BIN_ORDER[depth_bin], "geometry": merged})
+
+    out_gdf = gpd.GeoDataFrame(records, geometry="geometry", crs=UTM_CRS).to_crs(4326)
+    out_gdf["geometry"] = out_gdf.geometry.apply(lambda g: _clean_polygonal(g, min_area=1e-10))
+    out_gdf = out_gdf[out_gdf.geometry.notna() & ~out_gdf.geometry.is_empty]
+    out_gdf = out_gdf.sort_values("bin_order").reset_index(drop=True)
+
+    out_path = DEPTH_POLY_DIR / f"{year}_combined_depth_polygons.geojson"
+    if out_path.exists():
+        out_path.unlink()
+    out_gdf.to_file(out_path, driver="GeoJSON", COORDINATE_PRECISION=6)
+    stage_note = (
+        f", shifted to today's stage ({', '.join(f'{g}={s:g}ft' for g, s in sorted(today_stage.items()) if g in regions)})"
+        if today_stage else ""
+    )
+    print(f"Wrote {out_path} -- {len(out_gdf)} depth-bin polygons from {src.name}{stage_note}")
+    return out_path
+
+
+def convert_low_water_scenario(year, low_year):
+    """Current-year replacement for combine_year(year, stage=..., out_suffix=...):
+    CURRENT_YEAR_DATA_DIR's <year>_low_water_<low_year>_polygon shapefile is already
+    shifted to that year's historic low-water stage and bucketed into DISPLAY_BINS
+    (depth_rang holds the band label without units, e.g. "20+") -- this just reformats
+    it to combine_year()'s output contract (depth_bin/bin_order in EPSG:4326)."""
+    src = (
+        CURRENT_YEAR_DATA_DIR / str(year) / f"{year}_low_water_{low_year}_polygon"
+        / f"{year}_low_water_{low_year}.shp"
+    )
+    if not src.exists():
+        print(f"No {src} -- skipping {low_year} low-water scenario for {year}.")
+        return None
+
+    gdf = gpd.read_file(src)
+    # the shapefile's string field stores missing values as the literal text "nan"
+    # (dbf strings have no real null), not an actual NaN
+    gdf = gdf[gdf["depth_rang"].notna() & (gdf["depth_rang"] != "nan")].copy()
+    gdf["depth_bin"] = gdf["depth_rang"] + " ft"
+    gdf["bin_order"] = gdf["depth_bin"].map(DISPLAY_BIN_ORDER)
+    gdf = gdf.to_crs(4326)
+    gdf["geometry"] = gdf.geometry.apply(lambda g: _clean_polygonal(g, min_area=1e-10))
+    gdf = gdf[gdf.geometry.notna() & ~gdf.geometry.is_empty]
+    gdf = gdf.sort_values("bin_order").reset_index(drop=True)
+
+    out_path = DEPTH_POLY_DIR / f"{year}_combined_depth_polygons_{low_year}lowwater.geojson"
+    if out_path.exists():
+        out_path.unlink()
+    gdf[["depth_bin", "bin_order", "geometry"]].to_file(out_path, driver="GeoJSON", COORDINATE_PRECISION=6)
+    print(f"Wrote {out_path} -- {len(gdf)} depth-bin polygons from {src.name}")
+    return out_path
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--year", type=int, default=date.today().year)
     args = parser.parse_args()
-    combine_year(args.year)
     if args.year == date.today().year:
+        build_current_conditions_polygon(args.year)
         # "20XX Low Water" scenario files for app.py's River Depth scenario toggle --
         # only meaningful for the current year's surveys.
-        for low_year, info in LOW_WATER_YEARS.items():
-            combine_year(args.year, stage=info["stage"], out_suffix=f"_{low_year}lowwater")
+        for low_year in LOW_WATER_YEARS:
+            convert_low_water_scenario(args.year, low_year)
+    else:
+        combine_year(args.year)

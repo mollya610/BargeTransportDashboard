@@ -829,12 +829,13 @@ def _add_depth_polygon_bin_traces(fig, bins):
         ))
 
 
-def _add_bottleneck_icon_markers(fig, icon_layers, lons, lats, widths):
-    """Add an invisible hoverable marker trace plus the "at-risk-icon" symbol layer at
-    each given point, hover-labeled with its navigable width. Shared by Current
-    Conditions' Navigation Bottleneck marker and Historic Conditions' narrow-width
-    points (see NARROW_WIDTHS_BY_YEAR) -- same icon, same hover treatment, different
-    source of points."""
+def _add_bottleneck_icon_markers(fig, icon_layers, lons, lats, widths, icon="at-risk-icon"):
+    """Add an invisible hoverable marker trace plus a symbol layer (icon="at-risk-icon",
+    the "Not Navigable" marker, by default; pass icon="reduced-nav-icon" for the
+    "Reduced Navigability" marker instead -- see custom_map_icons.js for both) at each
+    given point, hover-labeled with its navigable width. Shared by Current Conditions'
+    Navigation Bottleneck markers and Historic Conditions' narrow-width points (see
+    NARROW_WIDTHS_BY_YEAR) -- same hover treatment, different source of points."""
     lons, lats = list(lons), list(lats)
     if not lons:
         return
@@ -858,7 +859,7 @@ def _add_bottleneck_icon_markers(fig, icon_layers, lons, lats, widths):
             ],
         },
         "type": "symbol",
-        "symbol": {"icon": "at-risk-icon", "iconsize": 2.5},
+        "symbol": {"icon": icon, "iconsize": 2.5},
     })
 
 
@@ -909,6 +910,83 @@ for _nw_year in years:
     if not _nw_csv.exists():
         continue
     NARROW_WIDTHS_BY_YEAR[_nw_year] = pd.read_csv(_nw_csv)
+
+
+# Current-year Navigation Bottleneck points for the "River Depth" layer's Current
+# Conditions markers (see CC_LAYER_OPTIONS' "river_depth" option) -- restored from
+# Molly's DepthPolygons/<year>/ dataset (see update_bathym/make_combined_depth_polygons.py
+# module docstring), same "Not Navigable"/"Reduced Navigability" split as
+# NARROW_WIDTHS_BY_YEAR uses for Historic Conditions.
+#
+# "20XX Low Water" scenarios: <year>_low_water_<low_year>_bottlenecks.csv is already the
+# curated set of constraining points at that scenario's stage -- used as-is. (No file
+# for a scenario year with no bottlenecks that year, e.g. 2025.)
+CC_LOW_WATER_BOTTLENECKS_BY_YEAR = {}
+# "current" scenario: <year>_all_widths_by_stage.csv holds every confirmed survey's
+# narrowest crossing width at a whole range of hypothetical stages (one row per
+# survey/stage, see the now-retired 8_compute_width_by_stage.py) -- not pre-filtered to
+# just constraining points like the low-water CSVs, and with no reference-gage column,
+# so both are handled at load time here rather than persisted back to the file (so nothing
+# goes stale if Molly regenerates it without this column):
+#   - reference_gage: a survey's tested stage range starts at "that gage's historic
+#     minimum stage, minus 3ft" -- Memphis's minimum sits far below Greenville's (their
+#     thresholds are -10ft vs +7ft), so the two gages' surveys land in two clearly
+#     separated clusters of per-survey minimum stage (observed in the 2026 data: -17ft
+#     for Memphis-anchored surveys, -5ft for Greenville-anchored) -- -10 sits safely
+#     between the two clusters either way.
+#   - "today's" bottleneck width: looked up per survey at render time, nearest available
+#     stage to that survey's own gage's latest reading -- see _current_bottleneck_points.
+CC_ALL_WIDTHS_BY_STAGE = {}
+
+LATEST_STAGE_BY_GAGE = (
+    dict(river_stage_df.sort_values("date").groupby("gage")["stage"].last())
+    if not river_stage_df.empty else {}
+)
+
+for _cy_dir in sorted(p for p in _LOW_WATER_POLY_DIR.glob("[0-9][0-9][0-9][0-9]") if p.is_dir()):
+    _cy_year = int(_cy_dir.name)
+
+    _cy_bottlenecks = {}
+    for _low_year in LOW_WATER_YEAR_LABELS:
+        _lwb_csv = _cy_dir / f"{_cy_year}_low_water_{_low_year}_bottlenecks.csv"
+        if _lwb_csv.exists():
+            _cy_bottlenecks[_low_year] = pd.read_csv(_lwb_csv)
+    if _cy_bottlenecks:
+        CC_LOW_WATER_BOTTLENECKS_BY_YEAR[_cy_year] = _cy_bottlenecks
+
+    _aws_csv = _cy_dir / f"{_cy_year}_all_widths_by_stage.csv"
+    if _aws_csv.exists():
+        _aws_df = pd.read_csv(_aws_csv)
+        _aws_min_stage = _aws_df.groupby("survey_id")["stage"].transform("min")
+        _aws_df["reference_gage"] = np.where(_aws_min_stage <= -10, "Memphis", "Greenville")
+        CC_ALL_WIDTHS_BY_STAGE[_cy_year] = _aws_df
+
+
+def _current_bottleneck_points(year):
+    """Today's Navigation Bottleneck points for `year`'s "current conditions" River
+    Depth scenario -- each confirmed survey's narrowest crossing at the stage closest to
+    its own anchor gage's latest reading (clamped to the range that survey was tested
+    over), filtered down to genuinely narrow crossings the same way the low-water
+    bottleneck CSVs already are (anything at/above NAVIGABLE_WIDTH_LOW_FT isn't a
+    constraining point worth marking)."""
+    df = CC_ALL_WIDTHS_BY_STAGE.get(year)
+    if df is None or not LATEST_STAGE_BY_GAGE:
+        return pd.DataFrame(columns=["lat", "lon", "width"])
+    rows = []
+    for _, g in df.groupby("survey_id"):
+        target_stage = LATEST_STAGE_BY_GAGE.get(g["reference_gage"].iloc[0])
+        if target_stage is None:
+            continue
+        clamped = min(max(target_stage, g["stage"].min()), g["stage"].max())
+        rows.append(g.iloc[(g["stage"] - clamped).abs().argsort().iloc[0]])
+    if not rows:
+        return pd.DataFrame(columns=["lat", "lon", "width"])
+    out = pd.DataFrame(rows)
+    out = out[out["width"] < NAVIGABLE_WIDTH_LOW_FT]
+    # adjacent surveys can each pin the same physical crossing (see folder_name) --
+    # collapse those down to one marker, keeping the narrowest reading for that spot
+    out = out.sort_values("width").drop_duplicates(subset=["lat", "lon"], keep="first")
+    return out
 
 
 # AIS-derived dredge activity (2021-2024) -- distinct from the manually logged USACE
@@ -1542,7 +1620,7 @@ FULL_LAYER_OPTIONS = [
                         html.Div(
                             style={"display": "flex", "align-items": "flex-start", "gap": "6px"},
                             children=[
-                                html.Div(style={"width": "12px", "height": "12px", "border-radius": "50%", "background": "#fb8c00", "margin-top": "3px", "flex-shrink": "0"}),
+                                html.Img(src="/assets/at_risk_marker_orange.png", height="16", style={"margin-top": "1px", "flex-shrink": "0"}),
                                 html.Div([
                                     html.Span("Reduced Navigability", style={"font-size": "13px", "display": "block"}),
                                     html.Span("9ft channel is 300-800ft wide", style={"font-size": "11px", "color": "#666", "display": "block"}),
@@ -1710,7 +1788,7 @@ CC_LAYER_OPTIONS = [
                     html.Div(
                         style={"display": "flex", "align-items": "flex-start", "gap": "6px"},
                         children=[
-                            html.Div(style={"width": "12px", "height": "12px", "border-radius": "50%", "background": "#fb8c00", "margin-top": "3px", "flex-shrink": "0"}),
+                            html.Img(src="/assets/at_risk_marker_orange.png", height="16", style={"margin-top": "1px", "flex-shrink": "0"}),
                             html.Div([
                                 html.Span("Reduced Navigability", style={"font-size": "13px", "display": "block"}),
                                 html.Span("9ft channel is 300-800ft wide", style={"font-size": "11px", "color": "#666", "display": "block"}),
@@ -1874,8 +1952,14 @@ app.layout = html.Div(
             style={"position": "relative", "width": "100%", "height": "92vh"},
             children=[
 
-                # Map, edge to edge
+                # Map, edge to edge. Dash tags this div (id="map") with
+                # data-dash-is-loading="true" for as long as update_map (the callback
+                # writing to its "figure") is running -- custom.css uses that attribute
+                # to show map-spinner below, a small circle on top of the still-visible
+                # map, instead of dcc.Loading's default of blanking the map out while
+                # its own spinner shows.
                 dcc.Graph(id="map", style={"height": "100%", "width": "100%"}, config={"displayModeBar": False}),
+                html.Div(className="map-spinner", **{"aria-hidden": "true"}),
 
                 # Welcome intro -- explains the map/site on first load, dismissed for the session
                 html.Div(id="welcome-backdrop", style=WELCOME_BACKDROP_VISIBLE),
@@ -2735,14 +2819,34 @@ def update_map(year, layers_cc, layers_full, selected_shoaling_mile, cc_mode, de
         if combined_path.exists():
             _add_depth_polygon_traces(fig, combined_path)
 
+    # Current Conditions' Navigation Bottleneck markers, bundled with the River Depth
+    # layer above (see CC_LAYER_OPTIONS' "river_depth" legend entry) -- same
+    # "current"/"20XXlowwater" scenario switch as the polygon fill, and the same
+    # <300ft "Not Navigable" / 300-800ft "Reduced Navigability" icon split Historic
+    # Conditions' narrow-width points use below.
+    if cc_mode and "river_depth" in layers:
+        if depth_scenario == "current":
+            df_narrow = _current_bottleneck_points(year)
+        else:
+            low_year = int(depth_scenario.replace("lowwater", ""))
+            df_narrow = CC_LOW_WATER_BOTTLENECKS_BY_YEAR.get(year, {}).get(low_year)
+        if df_narrow is not None and not df_narrow.empty:
+            is_bottleneck = df_narrow["width"] < NAVIGABLE_WIDTH_HIGH_FT
+            df_bottleneck_pts = df_narrow[is_bottleneck]
+            df_wide_pts = df_narrow[~is_bottleneck]
+            _add_bottleneck_icon_markers(
+                fig, icon_layers,
+                df_bottleneck_pts["lon"], df_bottleneck_pts["lat"], df_bottleneck_pts["width"],
+            )
+            _add_bottleneck_icon_markers(
+                fig, icon_layers,
+                df_wide_pts["lon"], df_wide_pts["lat"], df_wide_pts["width"],
+                icon="reduced-nav-icon",
+            )
+
     #  bathym layer - drawn here (before dredging/shoaling/other) so it sits behind them
     # on the map, but legendrank pushes it below them in the legend regardless of draw
     # order.
-    #
-    # Current Conditions' "Navigation Bottleneck" markers (bathym_fixed.csv's
-    # vessel_path_width_ft/vessel_path_connected columns) were pulled out here --
-    # that data source is being redone; the legend entry describing them stays as a
-    # placeholder (see CC_LAYER_OPTIONS' "river_depth" option) until they're rebuilt.
     if not cc_mode and "bathy" in layers:
         # Historic Conditions: one filled polygon per depth band, covering every
         # confirmed survey from that year at that year's real lowest river stage
@@ -2750,8 +2854,8 @@ def update_map(year, layers_cc, layers_full, selected_shoaling_mile, cc_mode, de
         _add_depth_polygon_bin_traces(fig, LOW_WATER_POLY_BY_YEAR.get(year, []))
         # constraining/narrow points along that year's low-water channel (see
         # NARROW_WIDTHS_BY_YEAR). Points under the same 300ft bottleneck threshold
-        # Current Conditions uses get its Navigation Bottleneck warning icon; wider
-        # ones still worth flagging get a plain orange dot instead.
+        # Current Conditions uses get its "Not Navigable" warning icon; wider ones
+        # still worth flagging get the "Reduced Navigability" icon instead.
         df_narrow = NARROW_WIDTHS_BY_YEAR.get(year)
         if df_narrow is not None:
             is_bottleneck = df_narrow["width"] < NAVIGABLE_WIDTH_HIGH_FT
@@ -2761,16 +2865,11 @@ def update_map(year, layers_cc, layers_full, selected_shoaling_mile, cc_mode, de
                 fig, icon_layers,
                 df_bottleneck_pts["lon"], df_bottleneck_pts["lat"], df_bottleneck_pts["width"],
             )
-            if not df_wide_pts.empty:
-                fig.add_trace(go.Scattermap(
-                    lon=df_wide_pts["lon"],
-                    lat=df_wide_pts["lat"],
-                    mode="markers",
-                    marker=dict(size=12, color="#fb8c00"),
-                    showlegend=False,
-                    customdata=df_wide_pts[["width"]].round().astype(int).values,
-                    hovertemplate="<b>Width: %{customdata[0]} ft</b><extra></extra>",
-                ))
+            _add_bottleneck_icon_markers(
+                fig, icon_layers,
+                df_wide_pts["lon"], df_wide_pts["lat"], df_wide_pts["width"],
+                icon="reduced-nav-icon",
+            )
 
     # dredging/shoaling markers - one trace per category so each can be toggled and colored
     # on its own (draft restriction is drawn separately above, behind the bathymetry layer).
@@ -3015,7 +3114,16 @@ def update_map(year, layers_cc, layers_full, selected_shoaling_mile, cc_mode, de
             "symbol": {"icon": "dredge-icon", "iconsize": 2.5},
         })
 
-    # map layout
+    # map layout -- maplibre stacks layers in array order (later = drawn on top), so
+    # constraining-point icons (added above, before the dredging/shoaling loop) are
+    # moved to the end here rather than reordering the draw code itself, putting them
+    # above the shoaling/dredge icons regardless of which layers happen to be toggled on.
+    # A stable sort keeps every other pair's relative order (e.g. dredge vs. shoaling)
+    # exactly as drawn.
+    icon_layers = sorted(
+        icon_layers,
+        key=lambda layer: layer["symbol"]["icon"] in ("at-risk-icon", "reduced-nav-icon"),
+    )
     fig.update_layout(
         map=dict(
             style="carto-darkmatter",

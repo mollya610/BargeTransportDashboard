@@ -11,6 +11,9 @@ window.addEventListener('load', function () {
         // can be faded independently of the regular at-risk-icon layer -
         // used for the selected survey's marker while its depth polygons are showing
         { id: 'at-risk-icon-selected-15', src: '/assets/at_risk_marker.png' },
+        // "Reduced Navigability" constraining points (300-800ft wide) -- replaces the
+        // plain orange dot these used to be drawn as
+        { id: 'reduced-nav-icon-15', src: '/assets/at_risk_marker_orange.png' },
     ];
     var SELECTED_AT_RISK_OPACITY = 0.45;
     var iconListenerAdded = false;
