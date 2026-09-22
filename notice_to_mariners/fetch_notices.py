@@ -301,10 +301,15 @@ def main():
             if target.exists():
                 existing_xl = pd.read_excel(target)
                 existing_xl["date_published"] = pd.to_datetime(existing_xl["date_published"])
-                combined_xl = pd.concat([existing_xl, year_rows], ignore_index=True)
                 # message_id alone isn't a safe dedup key - NAVCEN sometimes reuses a
-                # notice's message_id for its own later cancellation - so key on the pair
-                combined_xl = combined_xl.drop_duplicates(subset=["message_id", "date_published"], keep="first")
+                # notice's message_id for its own later cancellation - so key on the pair.
+                # only drop incoming rows already present; never dedup existing rows against
+                # each other, since Molly manually splits one notice into several rows (one
+                # per mile-range segment) that share the same message_id/date_published
+                key = ["message_id", "date_published"]
+                existing_keys = pd.MultiIndex.from_frame(existing_xl[key])
+                is_new = ~pd.MultiIndex.from_frame(year_rows[key]).isin(existing_keys)
+                combined_xl = pd.concat([existing_xl, year_rows[is_new]], ignore_index=True)
             else:
                 combined_xl = year_rows
             combined_xl = combined_xl.sort_values("date_published", ascending=False)
