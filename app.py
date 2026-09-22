@@ -859,7 +859,7 @@ def _add_bottleneck_icon_markers(fig, icon_layers, lons, lats, widths, icon="at-
             ],
         },
         "type": "symbol",
-        "symbol": {"icon": icon, "iconsize": 2.5},
+        "symbol": {"icon": icon, "iconsize": 2.9},
     })
 
 
@@ -2983,7 +2983,7 @@ def update_map(year, layers_cc, layers_full, selected_shoaling_mile, cc_mode, de
                     ],
                 },
                 "type": "symbol",
-                "symbol": {"icon": "shoaling-icon", "iconsize": 3},
+                "symbol": {"icon": "shoaling-icon", "iconsize": 2.2},
             })
 
     # "other" notices (e.g. tropical storms) - always shown regardless of layer toggle,
