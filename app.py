@@ -146,8 +146,8 @@ CATEGORY_COLORS = {"dredging": "#4a3000", "shoaling": "#fdd734", "draft": "#8c51
 DEFAULT_MAP_ZOOM = 4.8
 DEFAULT_MAP_CENTER = dict(lat=35.8, lon=-90.6)
 CATEGORY_ICONS = {"dredging": "🛠️", "shoaling": "🔺", "other": "⚠️"}
-DRAFT_ANNOUNCED_OPACITY = 0.45
-DRAFT_IN_PLACE_OPACITY = 0.85
+DRAFT_ANNOUNCED_OPACITY = 0.35
+DRAFT_IN_PLACE_OPACITY = 0.7
 BIG, MED, SMALL = "18px", "14px", "11px"
 
 # the workbook uses short river codes rather than the full names in the mile-marker table
@@ -2789,7 +2789,7 @@ def update_map(year, layers_cc, layers_full, selected_shoaling_mile, cc_mode, de
                     lon=seg_lons,
                     lat=seg_lats,
                     mode="lines",
-                    line=dict(color=CATEGORY_COLORS["draft"], width=6),
+                    line=dict(color=CATEGORY_COLORS["draft"], width=5),
                     opacity=DRAFT_ANNOUNCED_OPACITY if is_upcoming else DRAFT_IN_PLACE_OPACITY,
                     legendgroup=f"draft-{status}",
                     showlegend=not shown_legend[status],
