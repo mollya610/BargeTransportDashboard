@@ -7,6 +7,7 @@ import functools
 from pathlib import Path
 import dash
 from dash import dcc, html, Input, Output, State
+from dash.exceptions import PreventUpdate
 import geopandas as gpd
 import plotly.graph_objects as go
 from shapely.ops import linemerge
@@ -179,30 +180,59 @@ LOW_WATER_YEAR_LABELS = {
     2025: "October 20, 2025",
 }
 
-def _ordinal(n):
-    """11/12/13 -> 'th' regardless of last digit (11th, not 11st); everything else keys
-    off the last digit (1st/2nd/3rd, else th)."""
-    suffix = "th" if 11 <= n % 100 <= 13 else {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
-    return f"{n}{suffix}"
-
 
 def _low_water_scenario_option(year):
-    """One depth-scenario-radio option for a "20XX Low Water" year -- bold year label,
-    the date it happened underneath in smaller/muted text (matches _cc_legend_row's
-    main-line/sub-line pattern used elsewhere in the legend). The year itself isn't
-    repeated in the date line since the line above it already states it."""
+    """One depth-scenario-radio-years option -- the year itself, with the date that
+    year's lowest river stage occurred alongside it in parentheses, in smaller muted
+    text."""
     event_date = datetime.strptime(LOW_WATER_YEAR_LABELS[year], "%B %d, %Y")
-    month_day = f"{event_date.strftime('%B')} {_ordinal(event_date.day)}"
+    month_day = f"{event_date.strftime('%B')} {event_date.day}"
     return {
-        "label": html.Div([
-            html.Span(f"{year} Low Water", style={"display": "block"}),
-            html.Span(
-                html.B(month_day),
-                style={"font-size": "11px", "color": "#888", "display": "block", "font-weight": "normal"},
-            ),
+        "label": html.Span([
+            str(year),
+            html.Span(f" ({month_day})", style={"font-size": "11px", "color": "#888"}),
         ]),
         "value": f"{year}lowwater",
     }
+
+
+def _formula_box(lines):
+    """One boxed term in the River Depth Scenarios equation diagram -- its label
+    stacked on separate lines inside a bordered box, e.g. ["River", "Depth"]."""
+    return html.Div(
+        [html.Div(line) for line in lines],
+        style={
+            "border": "1px solid #999",
+            "border-radius": "4px",
+            "padding": "3px 4px",
+            "text-align": "center",
+            "font-size": "10px",
+            "line-height": "1.25",
+            "background": "rgba(255,255,255,0.7)",
+            "white-space": "nowrap",
+            "display": "flex",
+            "flex-direction": "column",
+            "justify-content": "center",
+        },
+    )
+
+
+def _river_depth_equation_diagram():
+    """River Depth = River Stage - Riverbed Elevation, as a row of boxed terms
+    instead of a plain sentence -- see the River Depth Scenarios explanation."""
+    return html.Div(
+        [
+            _formula_box(["River", "Depth"]),
+            html.Span("=", style={"font-size": "13px", "margin": "0 3px", "display": "flex", "align-items": "center"}),
+            _formula_box(["River Stage", "(elevation of the", "river surface)"]),
+            html.Span("-", style={"font-size": "13px", "margin": "0 3px", "display": "flex", "align-items": "center"}),
+            _formula_box(["Riverbed", "Elevation"]),
+        ],
+        style={
+            "display": "flex", "align-items": "stretch", "justify-content": "center",
+            "margin": "6px 0",
+        },
+    )
 
 
 _stage_csv = Path("river_stage_history.csv")
@@ -1343,17 +1373,30 @@ MONTH_WEEK_TICKVALS = _month_starts.isocalendar()["week"].tolist()
 MONTH_WEEK_TICKTEXT = _month_starts.strftime("%b").tolist()
 
 
+def _plot_header(title, source, definition=None):
+    """Title + optional one-line definition + source, as plain HTML sitting above a
+    plots-panel dcc.Graph instead of inside the Plotly figure's own title/subtitle.
+    Keeping them in the figure meant every edit to the definition text (adding it,
+    resizing it) grew the figure's own top margin and resized the plot along with it;
+    this way the graph's height/margins stay fixed regardless of how much header text
+    there is."""
+    children = [html.Div(title, style={"font-size": "14px", "font-weight": "bold", "color": "#1b3a5c"})]
+    if definition:
+        children.append(html.Div(definition, style={"font-size": "12px", "font-style": "italic", "color": "#666", "margin-top": "2px"}))
+    children.append(html.Div(f"Source: {source}", style={"font-size": "10px", "color": "#999", "margin-top": "2px"}))
+    return html.Div(children, style={"font-family": "'DM Sans', sans-serif", "margin-bottom": "4px"})
+
+
 def _build_memphis_stage_fig(year, compare_year):
-    """Memphis river stage graph -- first plot in the price-plots panel."""
+    """Memphis river stage graph -- first plot in the price-plots panel. Title/
+    definition/source render as plain HTML above the dcc.Graph (see _plot_header)
+    instead of the figure's own title/subtitle -- putting them in the figure grew
+    the top margin every time text was added, resizing the whole plot along with it."""
     fig = go.Figure(data=_year_overlay_traces(
         memphis_stage, "week_no", "stage", year, "#2166ac", "date", "%{y:.2f} ft",
         compare_year=compare_year,
     ))
     fig.update_layout(
-        title=dict(
-            text="Memphis River Stage",
-            subtitle=dict(text="Source: NOAA National Weather Service", font=dict(size=10, color="#999")),
-        ),
         xaxis=dict(tickvals=MONTH_WEEK_TICKVALS, ticktext=MONTH_WEEK_TICKTEXT),
         yaxis_title="Stage (ft)",
         yaxis=dict(range=[memphis_stage['stage'].min()-1, memphis_stage['stage'].max()+1], hoverformat=".2f"),
@@ -1362,7 +1405,7 @@ def _build_memphis_stage_fig(year, compare_year):
            orientation="h",x=0.5,y=-0.32,xanchor="center",yanchor="top",traceorder="normal",
            font=dict(size=8),
            bgcolor="rgba(255,255,255,0.6)",bordercolor="black",borderwidth=1),
-        margin=dict(l=50, r=20, t=55, b=75),
+        margin=dict(l=50, r=20, t=20, b=75),
         hovermode="closest"
     )
     return fig
@@ -1521,10 +1564,17 @@ def build_demand_crop_section(production_fig, production_caption, futures_fig):
 def _layer_info_icon(source, description, wide=False):
     """Small '?' badge for a layer-toggle label; CSS-only hover tooltip (see custom.css)
     shows the data source and an explanation of what the layer means. `wide` widens the
-    tooltip box for longer explanations (e.g. the riverbed-survey risk breakdown).
+    tooltip box for longer explanations (e.g. the riverbed-survey risk breakdown);
+    `wide="xwide"` widens it further still, for a single line (e.g. the River Depth
+    formula) that needs more room than the standard wide box.
     `source=None` skips the "Source: ..." line, for tooltips explaining a calculation
     rather than a data source (e.g. the compare-years index)."""
-    tooltip_class = "layer-info-tooltip layer-info-tooltip-wide" if wide else "layer-info-tooltip"
+    if wide == "xwide":
+        tooltip_class = "layer-info-tooltip layer-info-tooltip-xwide"
+    elif wide:
+        tooltip_class = "layer-info-tooltip layer-info-tooltip-wide"
+    else:
+        tooltip_class = "layer-info-tooltip"
     source_children = []
     if source is not None:
         sources = source if isinstance(source, list) else [source]
@@ -1745,32 +1795,37 @@ CC_LAYER_OPTIONS = [
                 }),
                 "River Depth",
                 None,
-                "U.S. Army Corps of Engineers eHydro",
+                ["U.S. Army Corps of Engineers eHydro", "NOAA National Weather Service"],
                 [
                     html.Span(
-                        "Estimated riverbed depth at every confirmed survey "
-                        "location, shaded from deep (blue) to shallow (red). "
-                        "Shown for today's actual river stage by default -- use "
-                        "the \"River Depth Scenarios\" box below the legend to "
-                        "see it under a historic low-water stage instead.",
+                        "USACE eHydro survey data provides the elevation of the "
+                        "riverbed. NOAA stage data provides the elevation of the "
+                        "river surface.",
                         style={"display": "block", "margin-bottom": "6px"},
                     ),
                     html.Span(
-                        "Constraining points are also marked: the warning icon is "
-                        "Not Navigable (continuous 9ft-deep water narrower than "
-                        "300ft), the orange dot Reduced Navigability (300-800ft "
-                        "wide).",
+                        "River Depth = River Surface Elevation - Riverbed Elevation.",
+                        style={"display": "block", "margin-bottom": "6px"},
+                    ),
+                    html.Span(
+                        "A 9ft deep navigation channel is necessary for barge "
+                        "navigation. The \"Constraining Points\" show locations "
+                        "where the 9ft navigation channel is limited.",
                         style={"display": "block"},
                     ),
                 ],
+                tooltip_wide="xwide",
             ),
             html.Span(
-                "Zoom in to see depth at locations surveyed this season",
-                style={"font-size": "11px", "color": "#666", "display": "block", "font-weight": "normal"}
+                [
+                    "Zoom in to see depth at ",
+                    html.U(f"locations surveyed in {thisyear} only"),
+                ],
+                style={"font-size": "12px", "color": "#666", "display": "block", "font-weight": "normal"}
             ),
             html.Div(
                 "Constraining Points:",
-                style={"font-size": "13px", "font-weight": "bold", "display": "block", "width": "100%", "margin-top": "8px"}
+                style={"font-size": "13px", "font-weight": "bold", "display": "block", "width": "100%", "margin-top": "3px"}
             ),
             html.Div(
                 style={"display": "flex", "flex-direction": "column", "gap": "4px", "margin-top": "5px", "margin-left": "4px"},
@@ -2151,12 +2206,10 @@ app.layout = html.Div(
                         # River depth scenario toggle -- CC-only and only when the River
                         # Depth layer itself is checked (see sync_depth_scenario_visibility),
                         # same card style as map-controls above so it reads as a second box
-                        # stacked directly beneath the legend, but wider so the "20XX Low
-                        # Water" / "Occurred on <date>" option labels fit on one line each
-                        # instead of wrapping and stretching the box tall.
+                        # stacked directly beneath the legend.
                         html.Div(
                             id="depth-scenario-wrapper",
-                            style={"width": "340px", "display": "none"},
+                            style={"width": "300px", "display": "none"},
                             children=[
                                 html.Div(
                                     style={
@@ -2188,29 +2241,45 @@ app.layout = html.Div(
                                             id="depth-scenario-content",
                                             style={"display": "none"},
                                             children=[
-                                                html.P(
-                                                    "Check out river depths under different water "
-                                                    "level conditions",
-                                                    style={"font-size": "11px", "color": "#666", "margin": "8px 0 8px 0"},
-                                                ),
                                                 dcc.RadioItems(
-                                                    id="depth-scenario-radio",
+                                                    id="depth-scenario-radio-today",
                                                     options=[
-                                                        {"label": "Current Conditions", "value": "current"},
-                                                    ] + [
-                                                        _low_water_scenario_option(y) for y in sorted(LOW_WATER_YEAR_LABELS, reverse=True)
+                                                        {"label": "Today's River Stage", "value": "current"},
                                                     ],
                                                     value="current",
                                                     inputStyle={"margin-right": "6px"},
-                                                    labelStyle={"display": "flex", "align-items": "flex-start", "margin-bottom": "4px", "font-size": "13px"},
+                                                    labelStyle={"display": "flex", "align-items": "center", "font-size": "13px"},
+                                                    style={"margin": "8px 0 0 0"},
+                                                ),
+                                                _river_depth_equation_diagram(),
+                                                html.P(
+                                                    [
+                                                        "Check out river depth under ",
+                                                        html.B(f"{thisyear} riverbed elevation"),
+                                                        " conditions if the river falls to ",
+                                                        html.B("the lowest stage of"),
+                                                        ":",
+                                                    ],
+                                                    style={"font-size": "13px", "color": "#666", "margin": "2px 0 4px 0"},
+                                                ),
+                                                dcc.RadioItems(
+                                                    id="depth-scenario-radio-years",
+                                                    options=[
+                                                        _low_water_scenario_option(y) for y in sorted(LOW_WATER_YEAR_LABELS, reverse=True)
+                                                    ],
+                                                    value=None,
+                                                    inputStyle={"margin-right": "6px"},
+                                                    labelStyle={"display": "flex", "align-items": "flex-start", "margin-bottom": "0", "font-size": "13px"},
                                                     style={
                                                         "display": "grid",
                                                         "grid-template-columns": "1fr 1fr",
-                                                        "grid-template-rows": "repeat(3, auto)",
+                                                        "grid-template-rows": "repeat(2, auto)",
                                                         "grid-auto-flow": "column",
-                                                        "column-gap": "12px",
+                                                        "column-gap": "4px",
+                                                        "row-gap": "0",
                                                     },
                                                 ),
+                                                dcc.Store(id="depth-scenario-store", data="current"),
                                             ],
                                         ),
                                     ],
@@ -2271,13 +2340,57 @@ app.layout = html.Div(
                                 ),
                             ]
                         ),
-                        dcc.Graph(id="memphis-stage-plot", style={"height": "250px"}, config={"displayModeBar": False}),
-                        dcc.Graph(id="barge-rate-plot", style={"height": "250px"}, config={"displayModeBar": False}),
-                        dcc.Graph(id="barge-rate-nextmonth-plot", style={"height": "250px"}, config={"displayModeBar": False}),
-                        dcc.Graph(id="barge-rate-threemonth-plot", style={"height": "250px"}, config={"displayModeBar": False}),
-                        dcc.Graph(id="corn-spread-plot", style={"height": "250px"}, config={"displayModeBar": False}),
-                        dcc.Graph(id="cornprice-plot", style={"height": "250px"}, config={"displayModeBar": False}),
-                        dcc.Graph(id="soyprice-plot", style={"height": "250px"}, config={"displayModeBar": False}),
+                        html.Div([
+                            _plot_header(
+                                "Memphis River Stage", "NOAA National Weather Service",
+                                "Elevation of the river surface relative to a constant datum",
+                            ),
+                            dcc.Graph(id="memphis-stage-plot", style={"height": "250px"}, config={"displayModeBar": False}),
+                        ], style={"margin-bottom": "14px"}),
+                        html.Div([
+                            _plot_header(
+                                "St. Louis to New Orleans Spot Barge Rate",
+                                "U.S. Department of Agriculture Agricultural Marketing Service",
+                            ),
+                            dcc.Graph(id="barge-rate-plot", style={"height": "250px"}, config={"displayModeBar": False}),
+                        ], style={"margin-bottom": "14px"}),
+                        html.Div([
+                            _plot_header(
+                                "Forward Barge Rate: 1 Month",
+                                "U.S. Department of Agriculture Agricultural Marketing Service",
+                                "Purchasing barge space 1 month in advance",
+                            ),
+                            dcc.Graph(id="barge-rate-nextmonth-plot", style={"height": "250px"}, config={"displayModeBar": False}),
+                        ], style={"margin-bottom": "14px"}),
+                        html.Div([
+                            _plot_header(
+                                "Forward Barge Rate: 3 Months",
+                                "U.S. Department of Agriculture Agricultural Marketing Service",
+                            ),
+                            dcc.Graph(id="barge-rate-threemonth-plot", style={"height": "250px"}, config={"displayModeBar": False}),
+                        ], style={"margin-bottom": "14px"}),
+                        html.Div([
+                            _plot_header(
+                                "Illinois–Gulf Corn Price Spread",
+                                "U.S. Department of Agriculture Agricultural Marketing Service",
+                                "Difference between the price of corn in Illinois and the Gulf",
+                            ),
+                            dcc.Graph(id="corn-spread-plot", style={"height": "250px"}, config={"displayModeBar": False}),
+                        ], style={"margin-bottom": "14px"}),
+                        html.Div([
+                            _plot_header(
+                                "Gulf Corn Price",
+                                "U.S. Department of Agriculture Agricultural Marketing Service",
+                            ),
+                            dcc.Graph(id="cornprice-plot", style={"height": "250px"}, config={"displayModeBar": False}),
+                        ], style={"margin-bottom": "14px"}),
+                        html.Div([
+                            _plot_header(
+                                "Gulf Soybean Price",
+                                "U.S. Department of Agriculture Agricultural Marketing Service",
+                            ),
+                            dcc.Graph(id="soyprice-plot", style={"height": "250px"}, config={"displayModeBar": False}),
+                        ], style={"margin-bottom": "14px"}),
                         # Additional plots can be added as more children
                     ]
                 )
@@ -2639,7 +2752,7 @@ def sync_cc_mode_controls(cc_mode):
 )
 def sync_depth_scenario_visibility(cc_mode, layers_cc):
     show = bool(cc_mode) and "river_depth" in (layers_cc or [])
-    return {"width": "340px", "display": "block" if show else "none"}
+    return {"width": "300px", "display": "block" if show else "none"}
 
 
 @app.callback(
@@ -2652,6 +2765,35 @@ def toggle_depth_scenario_box(n_clicks):
     is_open = n_clicks % 2 == 1
     content_style = {"display": "block"} if is_open else {"display": "none"}
     return content_style, ("▲" if is_open else "▼")
+
+
+# "Today's River Stage" is split into its own RadioItems, above the explanation
+# paragraph, separate from the low-water-year RadioItems below it -- but the two
+# still act as one mutually-exclusive group, with depth-scenario-store holding
+# whichever one was picked last (consumed by update_map). Clearing the *other*
+# RadioItems' value below is itself a change this callback listens to, so it
+# re-fires once more on its own echo -- the State check against the store's
+# already-updated value is what stops that second firing from bouncing back.
+@app.callback(
+    Output("depth-scenario-store", "data"),
+    Output("depth-scenario-radio-today", "value"),
+    Output("depth-scenario-radio-years", "value"),
+    Input("depth-scenario-radio-today", "value"),
+    Input("depth-scenario-radio-years", "value"),
+    State("depth-scenario-store", "data"),
+    prevent_initial_call=True,
+)
+def sync_depth_scenario_selection(today_value, year_value, current_scenario):
+    trigger = dash.ctx.triggered_id
+    if trigger == "depth-scenario-radio-today" and today_value == "current":
+        if current_scenario == "current":
+            raise PreventUpdate
+        return "current", "current", None
+    if trigger == "depth-scenario-radio-years" and year_value is not None:
+        if current_scenario == year_value:
+            raise PreventUpdate
+        return year_value, None, year_value
+    raise PreventUpdate
 
 
 @app.callback(
@@ -2695,7 +2837,7 @@ def update_compare_years_barge_rate(click_data):
     Input("layer-toggle-full", "value"),
     Input("selected-shoaling-mile-store", "data"),
     Input("cc-mode-store", "data"),
-    Input("depth-scenario-radio", "value"),
+    Input("depth-scenario-store", "data"),
 )
 def update_map(year, layers_cc, layers_full, selected_shoaling_mile, cc_mode, depth_scenario):
     # year-slider's value is itself set by sync_cc_mode_controls (keyed off cc-mode-store),
@@ -2811,7 +2953,7 @@ def update_map(year, layers_cc, layers_full, selected_shoaling_mile, cc_mode, de
     # confirmed/reviewed). "current" (default) is shifted to today's actual river stage;
     # "20XXlowwater" is shifted to the stage each gage read on that year's lowest Memphis
     # reading (LOW_WATER_YEARS) -- all only ever produced for the current year's surveys,
-    # see the depth-scenario-radio control. Drawn before the constraining-point markers
+    # see the River Depth Scenarios controls. Drawn before the constraining-point markers
     # below so those markers sit on top of the depth fill instead of getting covered by it.
     if "river_depth" in layers:
         suffix = "" if depth_scenario == "current" else f"_{depth_scenario}"
@@ -3388,11 +3530,6 @@ def update_barge_rate_plot(year, compare_year):
         compare_year=compare_year, show_other_years_legend=False,
     ))
     fig.update_layout(
-        title=dict(
-            text="St. Louis to New Orleans Spot Barge Rate",
-            font=dict(size=14),
-            subtitle=dict(text="Source: U.S. Department of Agriculture Agricultural Marketing Service", font=dict(size=10, color="#999")),
-        ),
         xaxis=dict(tickvals=MONTH_WEEK_TICKVALS, ticktext=MONTH_WEEK_TICKTEXT),
         yaxis_title="Barge Rate ($/ton)",
         yaxis=dict(range=[barge_rates['stlrate_per_ton'].min(), barge_rates['stlrate_per_ton'].max()], hoverformat=".2f"),
@@ -3400,7 +3537,7 @@ def update_barge_rate_plot(year, compare_year):
             x=0.02,y=0.98,xanchor="left",yanchor="top",traceorder="normal",
             font=dict(size=9),
             bgcolor="rgba(255,255,255,0.6)",bordercolor="black",borderwidth=1),
-        margin=dict(l=50, r=20, t=55, b=40),
+        margin=dict(l=50, r=20, t=20, b=40),
         hovermode="closest"
     )
     return fig
@@ -3418,11 +3555,6 @@ def update_barge_rate_nextmonth_plot(year, compare_year):
         show_other_years_legend=False,
     ))
     fig.update_layout(
-        title=dict(
-            text="Forward Barge Rate: 1 Month",
-            font=dict(size=14),
-            subtitle=dict(text="Source: U.S. Department of Agriculture Agricultural Marketing Service", font=dict(size=10, color="#999")),
-        ),
         xaxis=dict(tickvals=MONTH_WEEK_TICKVALS, ticktext=MONTH_WEEK_TICKTEXT),
         yaxis_title="Barge Rate ($/ton)",
         yaxis=dict(range=[barge_rates_nextmonth['fwd_rate_per_ton'].min(), barge_rates_nextmonth['fwd_rate_per_ton'].max()], hoverformat=".2f"),
@@ -3430,7 +3562,7 @@ def update_barge_rate_nextmonth_plot(year, compare_year):
             x=0.02,y=0.98,xanchor="left",yanchor="top",traceorder="normal",
             font=dict(size=9),
             bgcolor="rgba(255,255,255,0.6)",bordercolor="black",borderwidth=1),
-        margin=dict(l=50, r=20, t=55, b=40),
+        margin=dict(l=50, r=20, t=20, b=40),
         hovermode="closest"
     )
     return fig
@@ -3448,11 +3580,6 @@ def update_barge_rate_threemonth_plot(year, compare_year):
         show_other_years_legend=False,
     ))
     fig.update_layout(
-        title=dict(
-            text="Forward Barge Rate: 3 Months",
-            font=dict(size=14),
-            subtitle=dict(text="Source: U.S. Department of Agriculture Agricultural Marketing Service", font=dict(size=10, color="#999")),
-        ),
         xaxis=dict(tickvals=MONTH_WEEK_TICKVALS, ticktext=MONTH_WEEK_TICKTEXT),
         yaxis_title="Barge Rate ($/ton)",
         yaxis=dict(range=[barge_rates_threemonth['fwd_rate_per_ton'].min(), barge_rates_threemonth['fwd_rate_per_ton'].max()], hoverformat=".2f"),
@@ -3460,7 +3587,7 @@ def update_barge_rate_threemonth_plot(year, compare_year):
             x=0.02,y=0.98,xanchor="left",yanchor="top",traceorder="normal",
             font=dict(size=9),
             bgcolor="rgba(255,255,255,0.6)",bordercolor="black",borderwidth=1),
-        margin=dict(l=50, r=20, t=55, b=40),
+        margin=dict(l=50, r=20, t=20, b=40),
         hovermode="closest"
     )
     return fig
@@ -3477,11 +3604,6 @@ def update_corn_spread_plot(year, compare_year):
         compare_year=compare_year, show_other_years_legend=False,
     ))
     fig.update_layout(
-        title=dict(
-            text="Illinois–Gulf Corn Price Spread",
-            font=dict(size=14),
-            subtitle=dict(text="Source: U.S. Department of Agriculture Agricultural Marketing Service", font=dict(size=10, color="#999")),
-        ),
         xaxis=dict(tickvals=MONTH_WEEK_TICKVALS, ticktext=MONTH_WEEK_TICKTEXT),
         yaxis_title="Spread ($/bushel)",
         yaxis=dict(range=[corn_spread['il_gulf_corn_spread'].min()-0.1, corn_spread['il_gulf_corn_spread'].max()+0.1], hoverformat=".2f"),
@@ -3489,7 +3611,7 @@ def update_corn_spread_plot(year, compare_year):
             x=0.02,y=0.98,xanchor="left",yanchor="top",traceorder="normal",
             font=dict(size=9),
             bgcolor="rgba(255,255,255,0.6)",bordercolor="black",borderwidth=1),
-        margin=dict(l=50, r=20, t=55, b=40),
+        margin=dict(l=50, r=20, t=20, b=40),
         hovermode="closest"
     )
     return fig
@@ -3506,11 +3628,6 @@ def update_cornprice_plot(year, compare_year):
         compare_year=compare_year, show_other_years_legend=False,
     ))
     fig.update_layout(
-        title=dict(
-            text="Gulf Corn Price",
-            font=dict(size=14),
-            subtitle=dict(text="Source: U.S. Department of Agriculture Agricultural Marketing Service", font=dict(size=10, color="#999")),
-        ),
         xaxis=dict(tickvals=MONTH_WEEK_TICKVALS, ticktext=MONTH_WEEK_TICKTEXT),
         yaxis_title="Price ($/bushel)",
         yaxis=dict(range=[corn_price['gulf_corn_price'].min()-0.1, corn_price['gulf_corn_price'].max()+0.1], hoverformat=".2f"),
@@ -3518,7 +3635,7 @@ def update_cornprice_plot(year, compare_year):
            x=0.02,y=0.98,xanchor="left",yanchor="top",traceorder="normal",
            font=dict(size=9),
            bgcolor="rgba(255,255,255,0.6)",bordercolor="black",borderwidth=1),
-        margin=dict(l=50, r=20, t=55, b=40),
+        margin=dict(l=50, r=20, t=20, b=40),
         hovermode="closest"
     )
     return fig
@@ -3534,11 +3651,6 @@ def update_soyprice_plot(year, compare_year):
         compare_year=compare_year, show_other_years_legend=False,
     ))
     fig.update_layout(
-        title=dict(
-            text="Gulf Soybean Price",
-            font=dict(size=14),
-            subtitle=dict(text="Source: U.S. Department of Agriculture Agricultural Marketing Service", font=dict(size=10, color="#999")),
-        ),
         xaxis=dict(tickvals=MONTH_WEEK_TICKVALS, ticktext=MONTH_WEEK_TICKTEXT),
         yaxis_title="Price ($/bushel)",
         yaxis=dict(range=[soy_price['gulf_soy_price'].min()-0.1, soy_price['gulf_soy_price'].max()+0.1], hoverformat=".2f"),
@@ -3546,7 +3658,7 @@ def update_soyprice_plot(year, compare_year):
            x=0.02,y=0.98,xanchor="left",yanchor="top",traceorder="normal",
            font=dict(size=9),
            bgcolor="rgba(255,255,255,0.6)",bordercolor="black",borderwidth=1),
-        margin=dict(l=50, r=20, t=55, b=40),
+        margin=dict(l=50, r=20, t=20, b=40),
         hovermode="closest"
     )
     return fig

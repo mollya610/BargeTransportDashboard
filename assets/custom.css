@@ -109,6 +109,21 @@ body.app-loaded .map-spinner {
     width: 300px;
 }
 
+/* River Depth tooltip needs enough width that "River Depth = Riverbed
+   Elevation - River Surface Elevation." fits on a single line. */
+.layer-info-icon .layer-info-tooltip-xwide {
+    width: 400px;
+}
+
+/* River Depth Scenarios' two RadioItems (depth-scenario-radio-today,
+   depth-scenario-radio-years) -- dash's own default per-option padding
+   (--Dash-Spacing, 4px top+bottom) stacks with the margins already set on
+   these two in app.py, reading as a much bigger gap than the rest of this
+   compact legend box uses. Tighten it down just for this box. */
+#depth-scenario-content .dash-options-list-option {
+    padding: 1px 0;
+}
+
 /* ==========================================================================
    Mobile layout (phones / narrow tablets)
    The desktop layout is built from fixed-px floating panels over a full-height
