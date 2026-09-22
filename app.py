@@ -1637,12 +1637,9 @@ HISTORIC_PURPOSE_HEADING_STYLE = {
     "font-size": "18px",
     "font-weight": "700",
     "color": "black",
-    "text-shadow": (
-        "-1px -1px 0 white, 1px -1px 0 white, -1px 1px 0 white, 1px 1px 0 white, "
-        "0 -1px 0 white, 0 1px 0 white, -1px 0 0 white, 1px 0 0 white"
-    ),
     "white-space": "nowrap",
-    "background": "rgba(255,255,255,0.6)",
+    "background": "rgba(255,255,255,0.9)",
+    "box-shadow": "0 1px 4px rgba(0,0,0,0.3)",
     "border-radius": "8px",
     "padding": "4px 10px",
 }
@@ -2156,9 +2153,8 @@ app.layout = html.Div(
                     },
                     children=[
                         # Historic Conditions page-purpose heading, floating on the map above
-                        # the legend -- white text-shadow outline keeps the black text legible
-                        # over the basemap. Hidden on Current Conditions (see
-                        # sync_cc_mode_controls).
+                        # the legend -- same card background/shadow as map-controls. Hidden on
+                        # Current Conditions (see sync_cc_mode_controls).
                         html.Div(
                             "How constrained has the Mississippi River been in past years?",
                             id="historic-purpose-heading",
