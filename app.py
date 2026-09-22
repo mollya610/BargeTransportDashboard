@@ -206,7 +206,7 @@ def _formula_box(lines):
             "border-radius": "4px",
             "padding": "3px 4px",
             "text-align": "center",
-            "font-size": "10px",
+            "font-size": "11px",
             "line-height": "1.25",
             "background": "rgba(255,255,255,0.7)",
             "white-space": "nowrap",
