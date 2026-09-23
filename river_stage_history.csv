@@ -9568,7 +9568,8 @@ date,gage,stage
 2026-09-19,Greenville,13.6
 2026-09-20,Greenville,14.11
 2026-09-21,Greenville,14.38
-2026-09-22,Greenville,14.22
+2026-09-22,Greenville,14.21
+2026-09-23,Greenville,14.03
 2000-01-01,Memphis,-8.5
 2000-01-02,Memphis,-9.0
 2000-01-03,Memphis,-9.2
@@ -19143,7 +19144,8 @@ date,gage,stage
 2026-09-19,Memphis,-0.39
 2026-09-20,Memphis,-0.45
 2026-09-21,Memphis,-1.25
-2026-09-22,Memphis,-1.88
+2026-09-22,Memphis,-2.09
+2026-09-23,Memphis,-2.01
 2000-01-01,St. Louis,1.11
 2000-01-02,St. Louis,1.89
 2000-01-03,St. Louis,2.97
@@ -28788,3 +28790,4 @@ date,gage,stage
 2026-09-20,St. Louis,7.24
 2026-09-21,St. Louis,9.87
 2026-09-22,St. Louis,11.74
+2026-09-23,St. Louis,14.34
