@@ -141,11 +141,12 @@ def _uncertainty_for_mile(mile):
 CATEGORY_LABELS = {"dredging": "Dredging", "shoaling": "Shoaling", "draft": "Draft Restriction", "other": "Other"}
 CATEGORY_COLORS = {"dredging": "#4a3000", "shoaling": "#fdd734", "draft": "#8c510a", "other": "#e6a817"}
 
-# Default map view (any map-based page) -- zoomed out enough to show the St. Louis-to-
-# Greenville stretch of the river, not tight on any one spot. uirevision="keep-map" on
-# the figure means this only applies before the user pans/zooms themselves.
-DEFAULT_MAP_ZOOM = 4.8
-DEFAULT_MAP_CENTER = dict(lat=35.8, lon=-90.6)
+# Default map view (any map-based page) -- zoomed in on Greenville, where survey
+# coverage is dense, so the depth coloring/lines are obviously visible on page load.
+# uirevision="keep-map" on the figure means this only applies before the user
+# pans/zooms themselves.
+DEFAULT_MAP_ZOOM = 10
+DEFAULT_MAP_CENTER = dict(lat=33.29, lon=-91.15)
 CATEGORY_ICONS = {"dredging": "🛠️", "shoaling": "🔺", "other": "⚠️"}
 DRAFT_ANNOUNCED_OPACITY = 0.35
 DRAFT_IN_PLACE_OPACITY = 0.7
