@@ -145,7 +145,7 @@ CATEGORY_COLORS = {"dredging": "#4a3000", "shoaling": "#fdd734", "draft": "#8c51
 # coverage is dense, so the depth coloring/lines are obviously visible on page load.
 # uirevision="keep-map" on the figure means this only applies before the user
 # pans/zooms themselves.
-DEFAULT_MAP_ZOOM = 10
+DEFAULT_MAP_ZOOM = 8.7
 DEFAULT_MAP_CENTER = dict(lat=33.29, lon=-91.15)
 CATEGORY_ICONS = {"dredging": "🛠️", "shoaling": "🔺", "other": "⚠️"}
 DRAFT_ANNOUNCED_OPACITY = 0.35
