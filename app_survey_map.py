@@ -112,6 +112,18 @@ else:
     historic_bathy = pd.DataFrame(columns=["survey_id", "year", "date", "lat", "lon", "milemarker"])
     HISTORIC_YEARS = []
 
+# Unprocessed surveys (2018-2025 cross-section surveys that haven't been through the
+# bathym_fixed.csv pipeline -- see build_unprocessed_survey_data.py), plotted the same
+# way as the historic surveys above but in pink, alongside whatever else that year shows.
+_UNPROCESSED_CSV = Path("update_bathym/UnprocessedDepthPolygons/unprocessed_surveys_combined.csv")
+if _UNPROCESSED_CSV.exists():
+    unprocessed_bathy = pd.read_csv(_UNPROCESSED_CSV)
+    UNPROCESSED_YEARS = sorted(unprocessed_bathy["year"].unique().tolist())
+else:
+    unprocessed_bathy = pd.DataFrame(columns=["survey_id", "year", "date", "lat", "lon", "milemarker"])
+    UNPROCESSED_YEARS = []
+UNPROCESSED_COLOR = "#e91e8c"
+
 
 def _gage_info(m):
     if m >= 951:
@@ -119,6 +131,38 @@ def _gage_info(m):
     if m >= 580:
         return "Memphis", -10, "Memphis gage is at -10ft"
     return "Greenville", 7, "Greenville gage is at 7ft"
+
+def _add_plain_survey_trace(fig, df, color, name):
+    """One single-color dot per survey (no risk tier) -- used for the historic (green)
+    and unprocessed (pink) surveys, both of which only have survey_id/date/lat/lon/
+    milemarker. Same customdata layout as the risk-bin traces so handle_survey_click
+    works unchanged."""
+    if df.empty:
+        return
+    df_bin = df.copy()
+    df_bin["date_fmt"] = pd.to_datetime(df_bin["date"]).dt.strftime("%B %-d, %Y")
+    df_bin["click_hint"] = "<i>Click for depth map and details</i>"
+    df_bin["depth"] = np.nan
+    gage_info = df_bin["milemarker"].apply(_gage_info)
+    df_bin["gage_name"] = gage_info.apply(lambda t: t[0])
+    df_bin["gage_value"] = gage_info.apply(lambda t: t[1])
+    df_bin["gage_label"] = gage_info.apply(lambda t: t[2])
+    df_bin["gage_uncertainty"] = df_bin["milemarker"].apply(base._uncertainty_for_mile)
+    custom = df_bin[["date_fmt", "depth", "survey_id", "click_hint", "gage_label", "gage_name", "gage_value", "gage_uncertainty"]].copy()
+    custom.insert(0, "_type", "bathy")
+    fig.add_trace(go.Scattermap(
+        lon=df_bin["lon"], lat=df_bin["lat"], mode="markers",
+        marker=dict(size=9, color=color),
+        showlegend=True, legendgroup="depth_survey",
+        legendgrouptitle_text="Survey Locations",
+        legendrank=10, customdata=custom.values, name=name,
+        hovertemplate=(
+            "<b><span style='font-size:16px'>Riverbed Survey</span></b><br>"
+            "<span style='font-size:14px'>%{customdata[1]}</span><br>"
+            "%{customdata[4]}<extra></extra>"
+        )
+    ))
+
 
 RISK_BINS = [
     ("Low Risk", "#2e7d32", 9),
@@ -383,7 +427,8 @@ app.layout = html.Div(
                                             # surveys, so include it too, unlike Historic Conditions.
                                             # HISTORIC_YEARS (2015-2020, pre-dates bathym_fixed.csv)
                                             # goes in front, oldest first.
-                                            options=[{"label": str(y), "value": y} for y in HISTORIC_YEARS + base.years + [base.thisyear]],
+                                            # UNPROCESSED_YEARS adds any year only those surveys cover.
+                                            options=[{"label": str(y), "value": y} for y in sorted(set(HISTORIC_YEARS + base.years + [base.thisyear] + UNPROCESSED_YEARS))],
                                             value=base.DEFAULT_HISTORIC_YEAR,
                                             clearable=False,
                                             style={"height": "40px", "font-size": "15px"},
@@ -435,6 +480,8 @@ def update_map(year, layers, selected_survey, selected_shoaling_mile):
     df_b = df_b[df_b["survey_id"].isin(DEPTH_POLY_FILES)]
     df_hist = historic_bathy[historic_bathy["year"] == year]
     df_hist = df_hist[df_hist["survey_id"].isin(DEPTH_POLY_FILES)]
+    df_unproc = unprocessed_bathy[unprocessed_bathy["year"] == year]
+    df_unproc = df_unproc[df_unproc["survey_id"].isin(DEPTH_POLY_FILES)]
     # hide the dot for whichever survey is currently showing its polygon overlay, but if
     # it's High risk, keep its marker up (faded) at the problem point so it's not lost
     # under the polygon
@@ -443,6 +490,7 @@ def update_map(year, layers, selected_survey, selected_shoaling_mile):
         sid = selected_survey.get("survey_id")
         df_b = df_b[df_b["survey_id"] != sid]
         df_hist = df_hist[df_hist["survey_id"] != sid]
+        df_unproc = df_unproc[df_unproc["survey_id"] != sid]
         match = bathy[(bathy["survey_id"] == sid) & (bathy["at_risk_eff"] == "high")]
         if not match.empty:
             selected_at_risk_row = match.iloc[0]
@@ -520,30 +568,7 @@ def update_map(year, layers, selected_survey, selected_shoaling_mile):
     if "bathy" in layers and year in HISTORIC_YEARS:
         # 2015-2020: no bathym_fixed.csv risk classification exists for these, so every
         # dot is plotted the same way (green), unlike the Low/Medium/High risk bins below
-        df_bin = df_hist.copy()
-        if not df_bin.empty:
-            df_bin["date_fmt"] = pd.to_datetime(df_bin["date"]).dt.strftime("%B %-d, %Y")
-            df_bin["click_hint"] = "<i>Click for depth map and details</i>"
-            df_bin["depth"] = np.nan
-            gage_info = df_bin["milemarker"].apply(_gage_info)
-            df_bin["gage_name"] = gage_info.apply(lambda t: t[0])
-            df_bin["gage_value"] = gage_info.apply(lambda t: t[1])
-            df_bin["gage_label"] = gage_info.apply(lambda t: t[2])
-            df_bin["gage_uncertainty"] = df_bin["milemarker"].apply(base._uncertainty_for_mile)
-            custom = df_bin[["date_fmt", "depth", "survey_id", "click_hint", "gage_label", "gage_name", "gage_value", "gage_uncertainty"]].copy()
-            custom.insert(0, "_type", "bathy")
-            fig.add_trace(go.Scattermap(
-                lon=df_bin["lon"], lat=df_bin["lat"], mode="markers",
-                marker=dict(size=9, color="#2e7d32"),
-                showlegend=True, legendgroup="depth_survey",
-                legendgrouptitle_text="Survey Locations",
-                legendrank=10, customdata=custom.values, name="Historic Survey",
-                hovertemplate=(
-                    "<b><span style='font-size:16px'>Riverbed Survey</span></b><br>"
-                    "<span style='font-size:14px'>%{customdata[1]}</span><br>"
-                    "%{customdata[4]}<extra></extra>"
-                )
-            ))
+        _add_plain_survey_trace(fig, df_hist, "#2e7d32", "Historic Survey")
     elif "bathy" in layers:
         risk_masks = {
             "Low Risk": df_b["at_risk_eff"] == "low",
@@ -592,6 +617,11 @@ def update_map(year, layers, selected_survey, selected_shoaling_mile):
                     "type": "symbol",
                     "symbol": {"icon": "at-risk-icon", "iconsize": 2.5},
                 })
+
+    if "bathy" in layers:
+        # unprocessed surveys: same plain-dot treatment as historic, pink, on top of
+        # whatever else this year shows
+        _add_plain_survey_trace(fig, df_unproc, UNPROCESSED_COLOR, "Unprocessed Survey")
 
     if selected_at_risk_row is not None:
         icon_layers.append({
