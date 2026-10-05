@@ -124,6 +124,45 @@ body.app-loaded .map-spinner {
     padding: 1px 0;
 }
 
+/* Constraining Points callout -- a speech bubble popping out of the legend's
+   "Constraining Points" row, pointing an arrow back at it. Shown once, right after the
+   welcome modal closes (see close_welcome/close_constrain_callout in app.py). The
+   anchor just needs position:relative so the popout's left:100% is relative to this
+   row rather than the whole legend card. */
+.constrain-callout-anchor {
+    position: relative;
+}
+
+.constrain-callout-popout {
+    position: absolute;
+    left: 100%;
+    top: -10px;
+    margin-left: 16px;
+    width: 270px;
+    z-index: 50;
+    background: white;
+    color: #333;
+    font-family: Arial, sans-serif;
+    font-size: 14px;
+    line-height: 1.5;
+    padding: 14px 18px;
+    border-radius: 8px;
+    border: 2px solid #d62728;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.4);
+}
+
+.constrain-callout-popout::before {
+    content: "";
+    position: absolute;
+    left: -8px;
+    top: 16px;
+    width: 0;
+    height: 0;
+    border-top: 8px solid transparent;
+    border-bottom: 8px solid transparent;
+    border-right: 8px solid #d62728;
+}
+
 /* ==========================================================================
    Mobile layout (phones / narrow tablets)
    The desktop layout is built from fixed-px floating panels over a full-height
@@ -179,6 +218,21 @@ body.app-loaded .map-spinner {
     }
     #year-select-wrapper, #layer-toggle-wrapper {
         width: 100% !important;
+    }
+
+    /* Constraining Points callout: desktop pops it out to the right of the legend
+       row (left:100%), but #map-controls is capped to 58vw here with overflow-y:auto
+       (which also clips the x-axis per the CSS spec once y isn't visible), so a
+       right-popping box would be scrolled out of view. Drop it below the row instead,
+       with the arrow pointing up at it rather than sideways. */
+    .constrain-callout-popout {
+        position: static !important;
+        margin: 10px 0 0 0 !important;
+        width: 100% !important;
+        max-width: none !important;
+    }
+    .constrain-callout-popout::before {
+        display: none;
     }
     #historic-purpose-heading {
         font-size: 15px !important;

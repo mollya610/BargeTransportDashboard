@@ -1047,6 +1047,12 @@ def _current_bottleneck_points(year):
     return out
 
 
+# Count shown in the post-welcome "Constraining Points" callout (see CC_LAYER_OPTIONS
+# and close_welcome) -- today's bottleneck count for the current year, same set the map
+# itself draws by default.
+CURRENT_CONSTRAINING_POINTS_COUNT = len(_current_bottleneck_points(thisyear))
+
+
 # AIS-derived dredge activity (2021-2024) -- distinct from the manually logged USACE
 # notices above. dredge_events_2021_2025 shapefile has one row per year, each a
 # MultiPolygon of that year's individual dredge-event footprints aggregated together;
@@ -1122,6 +1128,20 @@ WELCOME_BOX_VISIBLE = {
     "box-shadow": "0 4px 24px rgba(0,0,0,0.4)", "font-family": "Arial, sans-serif",
 }
 WELCOME_BOX_HIDDEN = {"display": "none"}
+
+# Constraining Points callout -- shown right after the welcome modal closes, pointing at
+# the "Constraining Points" row of the legend (see CC_LAYER_OPTIONS' .constrain-callout-*
+# classes in custom.css). The backdrop sits below the legend's own zIndex (10, see
+# map-controls-stack) so the legend itself reads as highlighted rather than dimmed along
+# with the rest of the map; the popout box lives inside the legend and is just toggled
+# display:none/block here, its look and position coming from the CSS class.
+CONSTRAIN_CALLOUT_BACKDROP_VISIBLE = {
+    "position": "absolute", "top": 0, "left": 0, "width": "100%", "height": "100%",
+    "background": "rgba(0,0,0,0.35)", "zIndex": "9",
+}
+CONSTRAIN_CALLOUT_BACKDROP_HIDDEN = {"display": "none"}
+CONSTRAIN_CALLOUT_VISIBLE = {"display": "block"}
+CONSTRAIN_CALLOUT_HIDDEN = {"display": "none"}
 
 # Top-level pages -- clicking a header nav link switches which one is visible.
 # "River Conditions" (the map) is the default; "Barge Demand" is a full page, not
@@ -1868,33 +1888,73 @@ CC_LAYER_OPTIONS = [
                 style={"font-size": "12px", "color": "#666", "display": "block", "font-weight": "normal"}
             ),
             html.Div(
-                "Constraining Points:",
-                style={"font-size": "13px", "font-weight": "bold", "display": "block", "width": "100%", "margin-top": "3px"}
-            ),
-            html.Div(
-                style={"display": "flex", "flex-direction": "column", "gap": "4px", "margin-top": "5px", "margin-left": "4px"},
+                className="constrain-callout-anchor",
                 children=[
                     html.Div(
-                        style={"display": "flex", "align-items": "flex-start", "gap": "6px"},
-                        children=[
-                            html.Img(src="/assets/at_risk_marker.png", height="16", style={"margin-top": "1px", "flex-shrink": "0"}),
-                            html.Div([
-                                html.Span("Not Navigable", style={"font-size": "13px", "display": "block"}),
-                                html.Span("9ft channel is less than 300ft wide", style={"font-size": "11px", "color": "#666", "display": "block"}),
-                            ]),
-                        ],
+                        "Constraining Points:",
+                        style={"font-size": "13px", "font-weight": "bold", "display": "block", "width": "100%", "margin-top": "3px"}
                     ),
                     html.Div(
-                        style={"display": "flex", "align-items": "flex-start", "gap": "6px"},
+                        style={"display": "flex", "flex-direction": "column", "gap": "4px", "margin-top": "5px", "margin-left": "4px"},
                         children=[
-                            html.Img(src="/assets/at_risk_marker_orange.png", height="16", style={"margin-top": "1px", "flex-shrink": "0"}),
-                            html.Div([
-                                html.Span("Reduced Navigability", style={"font-size": "13px", "display": "block"}),
-                                html.Span("9ft channel is 300-800ft wide", style={"font-size": "11px", "color": "#666", "display": "block"}),
-                            ]),
+                            html.Div(
+                                style={"display": "flex", "align-items": "flex-start", "gap": "6px"},
+                                children=[
+                                    html.Img(src="/assets/at_risk_marker.png", height="16", style={"margin-top": "1px", "flex-shrink": "0"}),
+                                    html.Div([
+                                        html.Span("Not Navigable", style={"font-size": "13px", "display": "block"}),
+                                        html.Span("9ft channel is less than 300ft wide", style={"font-size": "11px", "color": "#666", "display": "block"}),
+                                    ]),
+                                ],
+                            ),
+                            html.Div(
+                                style={"display": "flex", "align-items": "flex-start", "gap": "6px"},
+                                children=[
+                                    html.Img(src="/assets/at_risk_marker_orange.png", height="16", style={"margin-top": "1px", "flex-shrink": "0"}),
+                                    html.Div([
+                                        html.Span("Reduced Navigability", style={"font-size": "13px", "display": "block"}),
+                                        html.Span("9ft channel is 300-800ft wide", style={"font-size": "11px", "color": "#666", "display": "block"}),
+                                    ]),
+                                ],
+                            ),
+                        ]
+                    ),
+
+                    # Callout explaining what "Constraining Points" are, shown once right
+                    # after the welcome modal closes (see close_welcome) and dismissed
+                    # with its own X (close_constrain_callout) -- positioned by the
+                    # .constrain-callout-popout CSS class, only toggled here.
+                    html.Div(
+                        id="constrain-callout-popout",
+                        className="constrain-callout-popout",
+                        style=CONSTRAIN_CALLOUT_HIDDEN,
+                        children=[
+                            html.Button(
+                                "✕", id="constrain-callout-close",
+                                style={
+                                    "position": "absolute", "top": "6px", "right": "8px",
+                                    "border": "none", "background": "none", "cursor": "pointer",
+                                    "font-size": "16px", "color": "#444",
+                                }
+                            ),
+                            html.Span([
+                                "Constraining points along the map show ",
+                                html.B("locations where barge transportation is affected by shallow water"),
+                                ".",
+                            ], style={"display": "block", "margin-bottom": "8px", "margin-right": "12px", "font-weight": "normal"}),
+                            html.Span([
+                                "There are currently ",
+                                html.B(f"{CURRENT_CONSTRAINING_POINTS_COUNT} active constraining points"),
+                                " on the river.",
+                            ], style={"display": "block", "font-size": "17px", "font-weight": "normal", "margin-bottom": "8px"}),
+                            html.Span([
+                                "Check out the \"River Depth Scenarios\" to ",
+                                html.B("see where constraining points might develop"),
+                                " if water levels drop further.",
+                            ], style={"display": "block", "font-weight": "normal"}),
                         ],
                     ),
-                ]
+                ],
             ),
         ]),
         "value": "river_depth",
@@ -2127,6 +2187,14 @@ app.layout = html.Div(
                         ),
                     ]
                 ),
+
+                # Constraining Points callout backdrop -- dims everything except the
+                # legend (which sits above this at zIndex 10, see map-controls-stack) so
+                # the "Constraining Points" row it points at reads as highlighted. Shown
+                # by close_welcome right after the welcome modal above is dismissed;
+                # dismissed itself by close_constrain_callout. The explanatory box lives
+                # inside the legend itself (see CC_LAYER_OPTIONS' constrain-callout-popout).
+                html.Div(id="constrain-callout-backdrop", style=CONSTRAIN_CALLOUT_BACKDROP_HIDDEN),
 
                 # Notice click-detail box, top-right - shared by all four notice categories
                 # (dredging/shoaling/draft/other); clicking any marker opens it
@@ -2701,11 +2769,26 @@ app.layout = html.Div(
 @app.callback(
     Output("welcome-box", "style"),
     Output("welcome-backdrop", "style"),
+    Output("constrain-callout-backdrop", "style"),
+    Output("constrain-callout-popout", "style"),
     Input("welcome-close", "n_clicks"),
     prevent_initial_call=True,
 )
 def close_welcome(n_clicks):
-    return WELCOME_BOX_HIDDEN, WELCOME_BACKDROP_HIDDEN
+    # Closing the welcome modal hands straight off to the Constraining Points callout
+    # (see CONSTRAIN_CALLOUT_* and close_constrain_callout) instead of leaving the user
+    # dropped back on a plain map.
+    return WELCOME_BOX_HIDDEN, WELCOME_BACKDROP_HIDDEN, CONSTRAIN_CALLOUT_BACKDROP_VISIBLE, CONSTRAIN_CALLOUT_VISIBLE
+
+
+@app.callback(
+    Output("constrain-callout-backdrop", "style", allow_duplicate=True),
+    Output("constrain-callout-popout", "style", allow_duplicate=True),
+    Input("constrain-callout-close", "n_clicks"),
+    prevent_initial_call=True,
+)
+def close_constrain_callout(n_clicks):
+    return CONSTRAIN_CALLOUT_BACKDROP_HIDDEN, CONSTRAIN_CALLOUT_HIDDEN
 
 
 # --------------------------------------------------
