@@ -6,8 +6,24 @@ __pycache__
 .gitignore
 .env
 .venv
+.venv_run
 venv
 node_modules
 .DS_Store
 OversizedSkipped
 .github
+
+# update_bathym/ pipeline + review data -- app.py (the deployed site) only reads
+# update_bathym/gage_uncertainty.csv, update_bathym/usace_river_mile_markers.csv, and
+# the per-year *_combined_depth_polygons*.geojson files in update_bathym/data/DepthPolygons/.
+# Everything below is used only by app_survey_map.py and the update_bathym/*.py scripts,
+# which run locally/in CI, not in the Hetzner container -- excluding them keeps those
+# ~780MB out of the Docker build context and image.
+update_bathym/HistoricDepthPolygons/
+update_bathym/UMDepthPolygons/
+update_bathym/UnprocessedDepthPolygons/
+update_bathym/HistoricSurveysToReview/
+update_bathym/data/DepthPolygons/LM_*
+update_bathym/data/DepthPolygons/UM_*
+update_bathym/data/NAVD88Files/
+update_bathym/data/OLDwidthbystage/
