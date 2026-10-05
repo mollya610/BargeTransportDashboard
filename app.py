@@ -820,11 +820,22 @@ def _load_depth_polygon_bins(poly_path_str):
     than these ~40m-buffered polygons need, which keeps the per-request trace payload
     smaller without any visible effect.
 
-    A raw single-survey file (see 9_make_depth_polygons.py) stores an exact whole-foot
-    depth_bin at every point -- regroup + dissolve those into the same coarse
-    DEPTH_POLY_COLORS display bands the combined "River Depth" layer uses, so one
-    survey doesn't draw dozens of same-colored overlapping traces. A combined file (see
-    make_combined_depth_polygons.py) already stores display-band labels directly."""
+    A combined file's pipeline (make_combined_depth_polygons.py) now writes a
+    {poly_path's stem}.json sidecar alongside the geojson -- the same bin_label/lons/lats
+    this function would otherwise produce, already flattened. When that sidecar exists,
+    this skips the geopandas read + flatten below entirely (what used to be the one-time
+    first-view cost this lru_cache was only ever able to amortize across the rest of the
+    session, not avoid) and just loads the precomputed arrays. Falls back to the
+    geopandas path for anything without a sidecar yet, e.g. a raw single-survey file
+    (see 9_make_depth_polygons.py), which stores an exact whole-foot depth_bin at every
+    point -- regroup + dissolve those into the same coarse DEPTH_POLY_COLORS display
+    bands the combined "River Depth" layer uses, so one survey doesn't draw dozens of
+    same-colored overlapping traces. A combined file already stores display-band labels
+    directly, so it skips that dissolve step either way."""
+    sidecar_path = Path(poly_path_str).with_suffix(".json")
+    if sidecar_path.exists():
+        with open(sidecar_path) as f:
+            return [tuple(b) for b in json.load(f)]
     poly_gdf = gpd.read_file(poly_path_str)
     if pd.api.types.is_numeric_dtype(poly_gdf["depth_bin"]):
         poly_gdf["depth_bin"] = poly_gdf["depth_bin"].apply(_assign_display_bin)
@@ -919,7 +930,18 @@ def _add_depth_polygon_traces(fig, poly_path):
 _LOW_WATER_BIN_ORDER = {label: i for i, (_, _, label) in enumerate(_DISPLAY_BINS)}
 LOW_WATER_POLY_BY_YEAR = {}
 for _lwp_year in years:
-    _lwp_shp = _LOW_WATER_POLY_DIR / f"{_lwp_year}_low_water_polygon" / f"{_lwp_year}_low_water.shp"
+    _lwp_dir = _LOW_WATER_POLY_DIR / f"{_lwp_year}_low_water_polygon"
+    # Pre-flattened by update_bathym/build_low_water_polygon_bins_cache.py -- these years
+    # are historic and never change, so the shapefile parse + _geom_to_lonlat flatten
+    # below only needs to happen once, ever, rather than on every single app startup.
+    # Falls back to parsing the shapefile directly for any year that cache hasn't been
+    # (re)built for yet.
+    _lwp_json = _lwp_dir / f"{_lwp_year}_low_water_bins.json"
+    if _lwp_json.exists():
+        with open(_lwp_json) as f:
+            LOW_WATER_POLY_BY_YEAR[_lwp_year] = [tuple(b) for b in json.load(f)]
+        continue
+    _lwp_shp = _lwp_dir / f"{_lwp_year}_low_water.shp"
     if not _lwp_shp.exists():
         continue
     _lwp_gdf = gpd.read_file(_lwp_shp).to_crs(4326)

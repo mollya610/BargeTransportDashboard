@@ -36,10 +36,12 @@ Usage: python update_bathym/make_combined_depth_polygons.py [--year YYYY]
 """
 
 import argparse
+import json
 from datetime import date
 from pathlib import Path
 
 import geopandas as gpd
+import numpy as np
 import pandas as pd
 import shapely
 from shapely import make_valid
@@ -182,6 +184,41 @@ def _clean_polygonal(geom, min_area=TOPOLOGY_MIN_AREA_M2):
     return geom
 
 
+def _geom_to_lonlat(geom):
+    """Same vectorized Polygon/MultiPolygon -> flat lon/lat-with-NaN-gaps conversion as
+    app.py's _geom_to_lonlat -- duplicated here (rather than imported) so this pipeline
+    script stays import-free of app.py, which has module-level side effects (building the
+    whole Dash app, loading every CSV) well beyond what this script needs."""
+    polys = list(geom.geoms) if geom.geom_type == "MultiPolygon" else [geom]
+    gap = np.array([np.nan])
+    lon_chunks, lat_chunks = [], []
+    for poly in polys:
+        coords = np.asarray(poly.exterior.coords)
+        lon_chunks.append(coords[:, 0])
+        lon_chunks.append(gap)
+        lat_chunks.append(coords[:, 1])
+        lat_chunks.append(gap)
+    lons = np.round(np.concatenate(lon_chunks), 6).tolist()
+    lats = np.round(np.concatenate(lat_chunks), 6).tolist()
+    return lons, lats
+
+
+def _write_bins_sidecar(out_gdf, out_path):
+    """Write a {label, lons, lats}-per-bin JSON file next to out_path (same stem,
+    .json extension), pre-flattened exactly the way app.py's _load_depth_polygon_bins
+    would on first view of out_path. out_gdf must already be sorted by bin_order (every
+    caller below sorts right before its own to_file call). Lets the app skip the
+    geopandas parse + flatten on every first view entirely -- just json.load() the
+    render-ready arrays (see app.py's _load_depth_polygon_bins sidecar check)."""
+    bins = []
+    for _, row in out_gdf.iterrows():
+        lons, lats = _geom_to_lonlat(row.geometry)
+        bins.append([row["depth_bin"], lons, lats])
+    sidecar_path = out_path.with_suffix(".json")
+    with open(sidecar_path, "w") as f:
+        json.dump(bins, f)
+
+
 def _survey_id_from_file(file_col):
     return (
         file_col
@@ -280,6 +317,7 @@ def combine_year(year, stage="today", out_suffix=""):
     # 6 decimals (~11cm) is already far finer than these ~40m-buffered polygons need,
     # and roughly halves the file's on-disk/network size for free
     out_gdf.to_file(out_path, driver="GeoJSON", COORDINATE_PRECISION=6)
+    _write_bins_sidecar(out_gdf, out_path)
     stage_note = (
         f", shifted to today's stage ({', '.join(f'{g}={s:g}ft' for g, s in sorted(today_stage.items()))})"
         if today_stage else ""
@@ -402,6 +440,7 @@ def build_current_conditions_polygon(year):
     if out_path.exists():
         out_path.unlink()
     out_gdf.to_file(out_path, driver="GeoJSON", COORDINATE_PRECISION=6)
+    _write_bins_sidecar(out_gdf, out_path)
     stage_note = (
         f", shifted to today's stage ({', '.join(f'{g}={s:g}ft' for g, s in sorted(today_stage.items()) if g in regions)})"
         if today_stage else ""
@@ -439,6 +478,7 @@ def convert_low_water_scenario(year, low_year):
     if out_path.exists():
         out_path.unlink()
     gdf[["depth_bin", "bin_order", "geometry"]].to_file(out_path, driver="GeoJSON", COORDINATE_PRECISION=6)
+    _write_bins_sidecar(gdf, out_path)
     print(f"Wrote {out_path} -- {len(gdf)} depth-bin polygons from {src.name}")
     return out_path
 
