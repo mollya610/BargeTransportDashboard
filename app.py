@@ -1153,6 +1153,19 @@ DEMAND_PAGE_HIDDEN = {"display": "none"}
 ABOUT_PAGE_VISIBLE = {"display": "block", "background": "white", "min-height": "92vh", "padding": "28px 40px"}
 ABOUT_PAGE_HIDDEN = {"display": "none"}
 
+# Copyright notice -- fixed to the bottom-left corner of the viewport (not a normal
+# footer) so it's visible on every tab without pushing page content down or requiring a
+# scroll past the map, which fills ~92vh on its own. Bottom-left, not bottom-right, so
+# it doesn't overlap the map's own "Carto, OpenStreetMap contributors" attribution,
+# which Plotly pins to the bottom-right of the map. pointer-events: none so it never
+# blocks a click on the map underneath it.
+COPYRIGHT_NOTICE_STYLE = {
+    "position": "fixed", "bottom": "4px", "left": "10px", "zIndex": "5",
+    "font-family": "Arial, sans-serif", "font-size": "12px", "color": "#555",
+    "background": "rgba(255,255,255,0.7)", "padding": "1px 6px", "border-radius": "4px",
+    "pointer-events": "none",
+}
+
 COMPARE_YEARS_TOGGLE_STYLE = {
     "background": "#2166ac", "color": "white", "border": "none",
     "border-radius": "8px", "padding": "16px 30px", "font-size": "20px",
@@ -2757,6 +2770,10 @@ app.layout = html.Div(
                 ),
             ]
         ),
+
+        # Copyright notice -- fixed to the viewport, shown on every tab (see
+        # COPYRIGHT_NOTICE_STYLE)
+        html.Div("© 2026 Molly Alcorn. All rights reserved.", style=COPYRIGHT_NOTICE_STYLE),
     ]
 )
 
