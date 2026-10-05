@@ -788,15 +788,24 @@ def _depth_bin_color(bin_label, color_map):
 
 
 def _geom_to_lonlat(geom):
-    """Convert a shapely Polygon or MultiPolygon to parallel lon/lat lists for Scattermap fill."""
-    lons, lats = [], []
+    """Convert a shapely Polygon or MultiPolygon to parallel lon/lat lists for Scattermap
+    fill, rounded to 6 decimal places (~11cm -- far finer than these ~40m-buffered
+    polygons need, which keeps the per-request trace payload smaller with no visible
+    effect). Vectorized with numpy rather than a per-point Python loop + round() call --
+    these combined/historic polygons run tens of thousands of points per bin, and the
+    naive loop used to dominate both app startup (building LOW_WATER_POLY_BY_YEAR) and
+    the first render of each depth-polygon file (see _load_depth_polygon_bins's cache)."""
     polys = list(geom.geoms) if geom.geom_type == "MultiPolygon" else [geom]
+    gap = np.array([np.nan])
+    lon_chunks, lat_chunks = [], []
     for poly in polys:
-        for coord in poly.exterior.coords:
-            lons.append(coord[0])
-            lats.append(coord[1])
-        lons.append(None)
-        lats.append(None)
+        coords = np.asarray(poly.exterior.coords)
+        lon_chunks.append(coords[:, 0])
+        lon_chunks.append(gap)
+        lat_chunks.append(coords[:, 1])
+        lat_chunks.append(gap)
+    lons = np.round(np.concatenate(lon_chunks), 6).tolist()
+    lats = np.round(np.concatenate(lat_chunks), 6).tolist()
     return lons, lats
 
 
@@ -826,8 +835,6 @@ def _load_depth_polygon_bins(poly_path_str):
     bins = []
     for _, row in poly_gdf.iterrows():
         lons, lats = _geom_to_lonlat(row.geometry)
-        lons = [round(v, 6) if v is not None else None for v in lons]
-        lats = [round(v, 6) if v is not None else None for v in lats]
         bins.append((row["depth_bin"], lons, lats))
     return bins
 
@@ -925,8 +932,6 @@ for _lwp_year in years:
     _lwp_bins = []
     for _, _lwp_row in _lwp_gdf.iterrows():
         _lwp_lons, _lwp_lats = _geom_to_lonlat(_lwp_row.geometry)
-        _lwp_lons = [round(v, 6) if v is not None else None for v in _lwp_lons]
-        _lwp_lats = [round(v, 6) if v is not None else None for v in _lwp_lats]
         _lwp_bins.append((_lwp_row["depth_bin"], _lwp_lons, _lwp_lats))
     LOW_WATER_POLY_BY_YEAR[_lwp_year] = _lwp_bins
 
