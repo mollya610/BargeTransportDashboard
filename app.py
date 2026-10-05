@@ -2101,9 +2101,10 @@ app.layout = html.Div(
                         html.Ul(
                             [
                                 html.Li([
-                                    html.Span("Riverbed conditions", style={"font-weight": "700"}),
-                                    ": surveys and shoaling reports show where the river is most "
-                                    "likely to ground a barge under low water.",
+                                    html.Span("River navigability", style={"font-weight": "700"}),
+                                    ": river depth (calculated from hydrographic surveys) and "
+                                    "shoaling reports show where the river is most likely to "
+                                    "ground a barge under low water.",
                                 ]),
                                 html.Li([
                                     html.Span("Grain markets", style={"font-weight": "700"}),
