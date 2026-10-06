@@ -1129,12 +1129,17 @@ WELCOME_BOX_VISIBLE = {
 }
 WELCOME_BOX_HIDDEN = {"display": "none"}
 
-# Constraining Points callout -- shown right after the welcome modal closes, pointing at
-# the "Constraining Points" row of the legend (see CC_LAYER_OPTIONS' .constrain-callout-*
-# classes in custom.css). The backdrop sits below the legend's own zIndex (10, see
-# map-controls-stack) so the legend itself reads as highlighted rather than dimmed along
-# with the rest of the map; the popout box lives inside the legend and is just toggled
-# display:none/block here, its look and position coming from the CSS class.
+# Constraining Points callout -- shown right after the welcome modal closes, explaining
+# the "Constraining Points" legend row (see .constrain-callout-popout in custom.css). It
+# lives in the DOM inside the legend (CC_LAYER_OPTIONS, under map-controls-stack) and is
+# positioned to pop out of/point at that row -- its own zIndex (50) only wins against its
+# siblings *inside* the legend though, not against the legend's outside neighbors (the
+# plots panel at zIndex 15, auto-open on Current Conditions, or the tab stack at zIndex
+# 20), so close_welcome/close_constrain_callout also toggle a "legend-elevated" className
+# on map-controls-stack itself while this is open, lifting the whole legend (zIndex 10 ->
+# 48) above those panels so the popout and its close button can't be painted over. This
+# backdrop's own zIndex just needs to stay below map-controls-stack's normal zIndex (10)
+# so the legend still reads as popping through the dim, same as before.
 CONSTRAIN_CALLOUT_BACKDROP_VISIBLE = {
     "position": "absolute", "top": 0, "left": 0, "width": "100%", "height": "100%",
     "background": "rgba(0,0,0,0.35)", "zIndex": "9",
@@ -1936,7 +1941,16 @@ CC_LAYER_OPTIONS = [
                     # Callout explaining what "Constraining Points" are, shown once right
                     # after the welcome modal closes (see close_welcome) and dismissed
                     # with its own X (close_constrain_callout) -- positioned by the
-                    # .constrain-callout-popout CSS class, only toggled here.
+                    # .constrain-callout-popout CSS class, only toggled here. Sits inside
+                    # the legend itself so it reads as pointing at this row, but while
+                    # it's open, close_welcome/close_constrain_callout also lift the
+                    # legend's own zIndex (see the "legend-elevated" className toggled on
+                    # map-controls-stack) above every other floating panel -- otherwise an
+                    # already-open plots panel (zIndex 15, auto-open on Current
+                    # Conditions) or tab stack (zIndex 20) would paint over this box and
+                    # its close button, since this box's own zIndex only ever wins against
+                    # its *own* siblings inside the legend, not against the legend's
+                    # outside neighbors.
                     html.Div(
                         id="constrain-callout-popout",
                         className="constrain-callout-popout",
@@ -2201,12 +2215,13 @@ app.layout = html.Div(
                     ]
                 ),
 
-                # Constraining Points callout backdrop -- dims everything except the
-                # legend (which sits above this at zIndex 10, see map-controls-stack) so
-                # the "Constraining Points" row it points at reads as highlighted. Shown
-                # by close_welcome right after the welcome modal above is dismissed;
-                # dismissed itself by close_constrain_callout. The explanatory box lives
-                # inside the legend itself (see CC_LAYER_OPTIONS' constrain-callout-popout).
+                # Constraining Points callout backdrop -- dims the whole map, same as the
+                # welcome modal's own backdrop. Shown by close_welcome right after the
+                # welcome modal above is dismissed; dismissed itself by
+                # close_constrain_callout. The explanatory box itself lives inside the
+                # legend (see CC_LAYER_OPTIONS' constrain-callout-popout), positioned by
+                # the .constrain-callout-popout CSS class so it reads as pointing at the
+                # "Constraining Points" row it explains.
                 html.Div(id="constrain-callout-backdrop", style=CONSTRAIN_CALLOUT_BACKDROP_HIDDEN),
 
                 # Notice click-detail box, top-right - shared by all four notice categories
@@ -2788,24 +2803,32 @@ app.layout = html.Div(
     Output("welcome-backdrop", "style"),
     Output("constrain-callout-backdrop", "style"),
     Output("constrain-callout-popout", "style"),
+    Output("map-controls-stack", "className"),
     Input("welcome-close", "n_clicks"),
     prevent_initial_call=True,
 )
 def close_welcome(n_clicks):
     # Closing the welcome modal hands straight off to the Constraining Points callout
     # (see CONSTRAIN_CALLOUT_* and close_constrain_callout) instead of leaving the user
-    # dropped back on a plain map.
-    return WELCOME_BOX_HIDDEN, WELCOME_BACKDROP_HIDDEN, CONSTRAIN_CALLOUT_BACKDROP_VISIBLE, CONSTRAIN_CALLOUT_VISIBLE
+    # dropped back on a plain map. "legend-elevated" (see custom.css) lifts the legend's
+    # zIndex above the plots panel/tab stack while the callout -- nested inside the
+    # legend -- needs to stay on top of them.
+    return (
+        WELCOME_BOX_HIDDEN, WELCOME_BACKDROP_HIDDEN,
+        CONSTRAIN_CALLOUT_BACKDROP_VISIBLE, CONSTRAIN_CALLOUT_VISIBLE,
+        "legend-elevated",
+    )
 
 
 @app.callback(
     Output("constrain-callout-backdrop", "style", allow_duplicate=True),
     Output("constrain-callout-popout", "style", allow_duplicate=True),
+    Output("map-controls-stack", "className", allow_duplicate=True),
     Input("constrain-callout-close", "n_clicks"),
     prevent_initial_call=True,
 )
 def close_constrain_callout(n_clicks):
-    return CONSTRAIN_CALLOUT_BACKDROP_HIDDEN, CONSTRAIN_CALLOUT_HIDDEN
+    return CONSTRAIN_CALLOUT_BACKDROP_HIDDEN, CONSTRAIN_CALLOUT_HIDDEN, ""
 
 
 # --------------------------------------------------

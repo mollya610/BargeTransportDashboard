@@ -125,10 +125,23 @@ body.app-loaded .map-spinner {
 }
 
 /* Constraining Points callout -- a speech bubble popping out of the legend's
-   "Constraining Points" row, pointing an arrow back at it. Shown once, right after the
+   "Constraining Points" row, pointing an arrow back at it, so it still reads as
+   explaining that specific row rather than a random dialog. Shown once, right after the
    welcome modal closes (see close_welcome/close_constrain_callout in app.py). The
    anchor just needs position:relative so the popout's left:100% is relative to this
-   row rather than the whole legend card. */
+   row rather than the whole legend card.
+
+   Two bugs this needs to keep dodging:
+   - Width: popping out at a fixed 270px past left:100% can run past the right edge of
+     the screen on an in-between width (e.g. a ~800px iPad). min()'d against the actual
+     viewport width lets it shrink instead of overflow.
+   - Stacking: this box's own z-index only wins against *siblings inside the legend* --
+     it's still a descendant of map-controls-stack (zIndex 10), so on Current Conditions
+     (where the price-plots panel, zIndex 15, auto-opens on load, right as this callout
+     would be shown) the plots panel painted over this box and its own ✕, with no way to
+     reach it. Fixed not here but in app.py: close_welcome/close_constrain_callout
+     toggle a "legend-elevated" className on map-controls-stack that lifts the whole
+     legend's zIndex above every other floating panel while this is open. */
 .constrain-callout-anchor {
     position: relative;
 }
@@ -138,7 +151,7 @@ body.app-loaded .map-spinner {
     left: 100%;
     top: -10px;
     margin-left: 16px;
-    width: 270px;
+    width: min(270px, calc(100vw - 100px));
     z-index: 50;
     background: white;
     color: #333;
@@ -161,6 +174,13 @@ body.app-loaded .map-spinner {
     border-top: 8px solid transparent;
     border-bottom: 8px solid transparent;
     border-right: 8px solid #d62728;
+}
+
+/* map-controls-stack's own zIndex (10, set inline in app.py) is too low to keep the
+   Constraining Points callout above the plots panel/tab stack while it's shown -- see
+   the callout's own comment above. Toggled by close_welcome/close_constrain_callout. */
+#map-controls-stack.legend-elevated {
+    z-index: 48 !important;
 }
 
 /* ==========================================================================
@@ -220,24 +240,36 @@ body.app-loaded .map-spinner {
         width: 100% !important;
     }
 
-    /* Constraining Points callout: desktop pops it out to the right of the legend
-       row (left:100%), but #map-controls is capped to 58vw here with overflow-y:auto
-       (which also clips the x-axis per the CSS spec once y isn't visible), so a
-       right-popping box would be scrolled out of view. Drop it below the row instead,
-       with the arrow pointing up at it rather than sideways. */
-    .constrain-callout-popout {
-        position: static !important;
-        margin: 10px 0 0 0 !important;
-        width: 100% !important;
-        max-width: none !important;
-    }
-    .constrain-callout-popout::before {
-        display: none;
-    }
     #historic-purpose-heading {
         font-size: 15px !important;
         max-width: 78vw !important;
         white-space: normal !important;
+    }
+
+    /* Constraining Points callout: desktop pops it out to the right of the legend row
+       (left:100%), but there's no room for that on a phone. Popping it below the row
+       in-flow (position:static) used to be the fallback, but the row sits inside
+       #map-controls' own scrollable 42vh box above, so the callout became part of that
+       scroll -- it read as stuck inside the legend rather than an overlay explaining it,
+       and its own ✕ could end up needing a scroll to reach. Pinning it just below the
+       legend's own capped height (42vh + the 15px it's offset from the top) instead
+       keeps it a real overlay -- out of that scroll -- while still reading as attached to
+       the legend right above it. left+right (no width) clamps it to the viewport so it
+       can never run off either edge; max-height/overflow-y guard the rare case where the
+       callout's own text is taller than what's left of a short landscape viewport. */
+    .constrain-callout-popout {
+        position: fixed !important;
+        top: calc(15px + 42vh + 8px) !important;
+        left: 15px !important;
+        right: 12px !important;
+        width: auto !important;
+        max-width: none !important;
+        margin: 0 !important;
+        max-height: calc(100vh - 15px - 42vh - 24px);
+        overflow-y: auto;
+    }
+    .constrain-callout-popout::before {
+        display: none;
     }
 
     /* Floating detail panels (notice/gage click-throughs) are sized in px for
@@ -257,14 +289,24 @@ body.app-loaded .map-spinner {
 
     /* Price-plots slide-out panel: its desktop width (400px, see
        PLOTS_PANEL_WIDTH) is as wide as most phone screens, so opening it hid
-       the map completely -- there was no visual cue it was still there behind
-       the panel. Cap it short of full width so a strip of map stays visible
-       on the left as a reminder, and matches PLOTS_PANEL_WIDTH's actual
-       "400px" (the old rule here checked for "420px", which never matched,
-       so this never actually applied). Only matters when open -- the closed
-       state is width:0. */
+       the map completely. An earlier fix capped it to 80vw, but the panel
+       also carries 20px of its own left+right padding (40px total, see
+       PLOTS_PANEL_OPEN in app.py) on top of that CSS width -- the actual
+       on-screen box came out closer to 90% of the viewport, leaving only a
+       sliver of map too thin to read. In practice you could see the plots or
+       the map but not both the way desktop lets you. calc(60vw - 40px)
+       targets the padding-inclusive on-screen width directly, landing the
+       panel at an actual 60% of the viewport and leaving a genuinely usable
+       ~40% strip of map alongside it, at the cost of tighter charts. Matches
+       PLOTS_PANEL_WIDTH's actual "400px" (the old rule here checked for
+       "420px", which never matched, so this never actually applied). Only
+       matters when open -- the closed state is width:0. The toggle tab
+       itself (#plots-toggle, in #right-tabs-stack) is a separate
+       position:absolute element pinned to the map's right edge above the
+       panel (zIndex 20 vs. the panel's 15), so it's never covered by the
+       panel regardless of width -- closing it back out is always reachable. */
     #plots-panel[style*="400px"] {
-        width: 80vw !important;
+        width: calc(60vw - 40px) !important;
     }
     #plots-toggle {
         font-size: 11px !important;
