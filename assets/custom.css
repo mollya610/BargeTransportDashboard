@@ -240,45 +240,32 @@ body.app-loaded .map-spinner {
         white-space: normal !important;
     }
 
-    /* Floating detail panels (notice/survey/gage click-throughs) are sized in
-       px for a desktop map; cap them so they can't run off a phone screen */
+    /* Floating detail panels (notice/gage click-throughs) are sized in px for
+       a desktop map; cap them so they can't run off a phone screen */
     #notice-detail-box,
-    #gage-detail-box,
-    #survey-detail-banner,
-    #survey-legend-box,
-    #insights-2026-box,
-    #current-gage-box,
-    #survey-zoom-memo {
+    #gage-detail-box {
         max-width: 78vw !important;
         width: auto !important;
     }
 
-    /* Survey banner + depth legend + current-gage + zoom-memo stack together
-       top-right when a survey dot is tapped -- on a short phone screen that
-       whole column can run past the bottom of the viewport. Cap the stack as
-       a group and let it scroll rather than spilling off-screen. */
-    #survey-panels-stack {
-        max-height: 55vh !important;
-        overflow-y: auto !important;
+    /* River Depth Scenarios box is a fixed 300px on desktop -- cap it to the
+       same width as the legend above it so it can't push past the screen edge */
+    #depth-scenario-wrapper {
+        width: 58vw !important;
+        max-width: 58vw !important;
     }
 
-    /* Gage-frequency panel reserves a 330px gap on its right for the survey
-       legend column on desktop -- on a phone that leaves almost no room, so
-       just span the width instead */
-    #gage-freq-panel {
-        left: 10px !important;
-        right: 10px !important;
+    /* Price-plots slide-out panel: its desktop width (400px, see
+       PLOTS_PANEL_WIDTH) is as wide as most phone screens, so opening it hid
+       the map completely -- there was no visual cue it was still there behind
+       the panel. Cap it short of full width so a strip of map stays visible
+       on the left as a reminder, and matches PLOTS_PANEL_WIDTH's actual
+       "400px" (the old rule here checked for "420px", which never matched,
+       so this never actually applied). Only matters when open -- the closed
+       state is width:0. */
+    #plots-panel[style*="400px"] {
+        width: 80vw !important;
     }
-
-    /* Price-plots and insights-summary slide-out panels: their desktop widths
-       are wider than most phones, which pushes their left edge off-screen.
-       Only applies when open (the closed state is width:0, matched by the
-       open-state widths instead) */
-    #plots-panel[style*="420px"],
-    #insights-panel[style*="380px"] {
-        width: 90vw !important;
-    }
-    #insights-toggle,
     #plots-toggle {
         font-size: 11px !important;
         padding: 8px 5px !important;
