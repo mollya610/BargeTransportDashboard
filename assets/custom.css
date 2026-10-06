@@ -343,3 +343,40 @@ body.app-loaded .map-spinner {
         box-sizing: border-box;
     }
 }
+
+/* ==========================================================================
+   Phone layout (narrower than the 768px tablet breakpoint above)
+   The legend ("Layers" box) is built from a couple dozen individually-set
+   px font-sizes and icon heights, tuned to look right on a laptop. Capped to
+   58vw it's still legible on an iPad -- there's enough actual screen there --
+   but the exact same px values on a ~390px-wide phone read as oversized for
+   how little screen the phone actually has. Rather than hand-shrinking each
+   of those many explicit sizes individually, every row's text content is
+   marked with the shared .cc-legend-row-text class (see _cc_legend_row,
+   FULL_LAYER_OPTIONS, and CC_LAYER_OPTIONS in app.py) so one rule can
+   collapse all of them to a single smaller size at once -- row-to-row
+   hierarchy still reads through font-weight (bold headers vs. plain notes),
+   which this doesn't touch. Deliberately does NOT touch the Constraining
+   Points callout (.constrain-callout-popout) even though it's nested inside
+   this same legend -- that box isn't tagged with .cc-legend-row-text, so
+   it keeps its own (already-legible) sizing.
+   ========================================================================== */
+@media (max-width: 480px) {
+    #map-controls {
+        max-width: 52vw !important;
+        padding: 8px 10px !important;
+    }
+    .cc-legend-row-text,
+    .cc-legend-row-text * {
+        font-size: 11px !important;
+    }
+    #layer-toggle-wrapper img {
+        height: 14px !important;
+        width: auto !important;
+    }
+    .layer-info-icon {
+        width: 11px !important;
+        height: 11px !important;
+        font-size: 8px !important;
+    }
+}

@@ -1737,7 +1737,7 @@ FULL_LAYER_OPTIONS = [
                             "border-radius": "2px",
                             "background": f"linear-gradient(to right, {', '.join(DEPTH_POLY_COLORS.values())})",
                         }),
-                        html.Span("River Depth", style={"font-size": "14px", "font-weight": "bold"}),
+                        html.Span("River Depth", className="cc-legend-row-text", style={"font-size": "14px", "font-weight": "bold"}),
                         _layer_info_icon(
                             RIVER_DEPTH_TOOLTIP_SOURCES,
                             _river_depth_tooltip_description(),
@@ -1747,13 +1747,16 @@ FULL_LAYER_OPTIONS = [
                 ),
                 html.Span(
                     "At lowest water level of selected year",
+                    className="cc-legend-row-text",
                     style={"font-size": "11px", "color": "#666", "display": "block", "font-weight": "normal"}
                 ),
                 html.Div(
                     "Constraining Points:",
+                    className="cc-legend-row-text",
                     style={"font-size": "13px", "font-weight": "bold", "display": "block", "width": "100%", "margin-top": "8px"}
                 ),
                 html.Div(
+                    className="cc-legend-row-text",
                     style={"display": "flex", "flex-direction": "column", "gap": "4px", "margin-top": "5px", "margin-left": "4px"},
                     children=[
                         html.Div(
@@ -1785,7 +1788,7 @@ FULL_LAYER_OPTIONS = [
     {
         "label": html.Span([
             html.Img(src="/assets/raindrop.png", height="22", style={"vertical-align": "middle", "margin-right": "5px"}),
-            html.Span("Stream Gage", style={"font-weight": "bold"}),
+            html.Span("Stream Gage", className="cc-legend-row-text", style={"font-weight": "bold"}),
             _layer_info_icon(
                 "USGS / NOAA-NWS",
                 [
@@ -1808,7 +1811,7 @@ FULL_LAYER_OPTIONS = [
     {
         "label": html.Span([
             html.Img(src="/assets/dredge_marker.png", height="22", style={"vertical-align": "middle", "margin-right": "5px"}),
-            html.Span("Dredging", style={"font-weight": "bold"}),
+            html.Span("Dredging", className="cc-legend-row-text", style={"font-weight": "bold"}),
             _layer_info_icon(
                 [
                     "U.S. Coast Guard Broadcast Notice to Mariners (2026)",
@@ -1839,7 +1842,7 @@ FULL_LAYER_OPTIONS = [
     {
         "label": html.Span([
             html.Img(src="/assets/shoaling_marker.png", height="22", style={"vertical-align": "middle", "margin-right": "5px"}),
-            html.Span("Shoaling", style={"font-weight": "bold"}),
+            html.Span("Shoaling", className="cc-legend-row-text", style={"font-weight": "bold"}),
             _layer_info_icon(
                 "U.S. Coast Guard Broadcast Notice to Mariners",
                 "Reports of shoaling (sediment buildup on the riverbed) "
@@ -1877,7 +1880,7 @@ def _cc_legend_row(icon, main_line, sub_line, tooltip_source, tooltip_descriptio
         )
     return html.Div(
         style={"display": "flex", "align-items": "flex-start", "gap": "6px"},
-        children=[icon, html.Div(label_children)],
+        children=[icon, html.Div(label_children, className="cc-legend-row-text")],
     )
 
 
@@ -1903,6 +1906,7 @@ CC_LAYER_OPTIONS = [
                     "Zoom in to see depth at ",
                     html.U(f"locations surveyed in {thisyear} only"),
                 ],
+                className="cc-legend-row-text",
                 style={"font-size": "12px", "color": "#666", "display": "block", "font-weight": "normal"}
             ),
             html.Div(
@@ -1910,9 +1914,11 @@ CC_LAYER_OPTIONS = [
                 children=[
                     html.Div(
                         "Constraining Points:",
+                        className="cc-legend-row-text",
                         style={"font-size": "13px", "font-weight": "bold", "display": "block", "width": "100%", "margin-top": "3px"}
                     ),
                     html.Div(
+                        className="cc-legend-row-text",
                         style={"display": "flex", "flex-direction": "column", "gap": "4px", "margin-top": "5px", "margin-left": "4px"},
                         children=[
                             html.Div(
@@ -2331,7 +2337,7 @@ app.layout = html.Div(
                                     id="layer-toggle-wrapper",
                                     style={"width": "240px"},
                                     children=[
-                                        html.Label("Layers", style={"font-weight": "bold", "margin-bottom": "6px", "display": "block"}),
+                                        html.Label("Layers", className="cc-legend-row-text", style={"font-weight": "bold", "margin-bottom": "6px", "display": "block"}),
                                         dcc.Checklist(
                                             id="layer-toggle-cc",
                                             options=CC_LAYER_OPTIONS,
