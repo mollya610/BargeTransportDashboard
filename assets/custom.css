@@ -362,6 +362,19 @@ body.app-loaded .map-spinner {
    it keeps its own (already-legible) sizing.
    ========================================================================== */
 @media (max-width: 480px) {
+    /* Welcome modal: smaller padding and a visible margin on each side, so it
+       reads as a pop-up over the map instead of filling the screen. Pinned to
+       the screen (not the map, which runs past the bottom of a phone screen) so
+       the max-height keeps the whole box on screen; the rest scrolls inside it. */
+    #welcome-box {
+        position: fixed !important;
+        max-width: calc(100% - 40px) !important;
+        max-height: calc(100dvh - 48px) !important;
+        padding: 20px 20px 18px 20px !important;
+    }
+    #welcome-backdrop {
+        position: fixed !important;
+    }
     #map-controls {
         max-width: 52vw !important;
         padding: 8px 10px !important;

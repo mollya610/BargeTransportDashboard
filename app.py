@@ -1124,6 +1124,10 @@ WELCOME_BACKDROP_HIDDEN = {"display": "none"}
 WELCOME_BOX_VISIBLE = {
     "position": "absolute", "top": "50%", "left": "50%", "transform": "translate(-50%, -50%)",
     "zIndex": "41", "width": "480px", "max-width": "90%",
+    # border-box so max-width includes the padding -- otherwise the padding pushes
+    # the box past both screen edges on a phone. Taller-than-screen content scrolls
+    # inside the box instead of running off the bottom.
+    "box-sizing": "border-box", "max-height": "calc(100% - 32px)", "overflow-y": "auto",
     "background": "white", "padding": "26px 30px", "border-radius": "10px",
     "box-shadow": "0 4px 24px rgba(0,0,0,0.4)", "font-family": "Arial, sans-serif",
 }
@@ -2164,7 +2168,7 @@ app.layout = html.Div(
                             style={
                                 "position": "absolute", "top": "10px", "right": "14px",
                                 "border": "none", "background": "none", "cursor": "pointer",
-                                "font-size": "18px", "color": "#888",
+                                "font-size": "24px", "color": "#000", "font-weight": "900",
                             }
                         ),
                         html.H3(
