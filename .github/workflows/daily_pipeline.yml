@@ -44,6 +44,8 @@ jobs:
         run: python update_bathym/6_make_depth_polygons.py
 
       # ── Notice pipeline ───────────────────────────────────────────────────────
+      # External-source fetch steps are continue-on-error so one site being
+      # down doesn't throw away everything else the run fetched.
       # NAVCEN sits behind an AWS load balancer that sometimes 403s cloud IPs
       # (including GitHub's runners) -- don't let that block the rest of the
       # pipeline. last_run_date.csv only advances on success, so the next good
@@ -54,6 +56,7 @@ jobs:
 
       # ── River stage ───────────────────────────────────────────────────────────
       - name: Fetch river stage readings
+        continue-on-error: true
         run: python fetch_stage.py
 
       # Recombine this year's depth polygons shifted to today's stage -- must run
@@ -64,15 +67,18 @@ jobs:
 
       # ── Barge rates / corn / soy prices / Dec-corn & Nov-soy futures ─────────
       - name: Fetch barge rate and price data
+        continue-on-error: true
         env:
           MARS_API_KEY: ${{ secrets.MARS_API_KEY }}
         run: python fetch_market_data.py
 
       # ── Barge demand indicator: WASDE production estimate + NASS history ────
       - name: Fetch latest WASDE production estimate
+        continue-on-error: true
         run: python fetch_wasde.py
 
       - name: Fetch historical grain production (NASS QuickStats)
+        continue-on-error: true
         env:
           NASS_API_KEY: ${{ secrets.NASS_API_KEY }}
         run: python fetch_grain_production.py
@@ -91,6 +97,9 @@ jobs:
             notice_to_mariners/last_run_date.csv \
             river_stage_history.csv \
             barge_rates_history.csv \
+            barge_rates_nextmonth_history.csv \
+            barge_rates_threemonth_history.csv \
+            corn_spread_history.csv \
             corn_price_history.csv \
             soy_price_history.csv \
             futures_dec_nov_history.csv \

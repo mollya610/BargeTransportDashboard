@@ -107,12 +107,12 @@ def fetch_corn_soy_prices():
     corn_spread_df["il_gulf_corn_spread"] = pd.to_numeric(corn_spread_df["il_gulf_corn_spread"], errors="coerce")
     corn_spread_df = corn_spread_df.dropna(subset=["date", "il_gulf_corn_spread"])
 
+    # the sheet only dates the first (IL--Gulf corn) row of each week's block, so the
+    # soybean row further down has a blank date -- carry the week's date down to it
     soy_spread = corn_soy_spread.rename(columns={"Unnamed: 0": "date", "Destination Price": "gulf_soy_price"})
-    soy_spread["date"] = soy_spread["date"].shift(1)
+    soy_spread["date"] = pd.to_datetime(soy_spread["date"]).ffill()
     soy_spread = soy_spread[soy_spread["Commodity"] == "Soybean"]
-    soy_spread["date"] = soy_spread["date"].shift(1)
     soy_price = soy_spread.loc[:, ("date", "gulf_soy_price")].copy()
-    soy_price["date"] = pd.to_datetime(soy_price["date"])
     soy_price = soy_price.dropna(subset=["date", "gulf_soy_price"])
 
     return corn_price, soy_price, corn_spread_df
