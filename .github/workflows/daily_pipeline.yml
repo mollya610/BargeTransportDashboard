@@ -44,7 +44,12 @@ jobs:
         run: python update_bathym/6_make_depth_polygons.py
 
       # ── Notice pipeline ───────────────────────────────────────────────────────
+      # NAVCEN sits behind an AWS load balancer that sometimes 403s cloud IPs
+      # (including GitHub's runners) -- don't let that block the rest of the
+      # pipeline. last_run_date.csv only advances on success, so the next good
+      # run backfills whatever was missed.
       - name: Fetch new USCG notices
+        continue-on-error: true
         run: python notice_to_mariners/fetch_notices.py
 
       # ── River stage ───────────────────────────────────────────────────────────
