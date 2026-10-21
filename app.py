@@ -2136,6 +2136,9 @@ app.layout = html.Div(
         # both nav tabs share the same map/controls DOM, this just switches which subset
         # of the map controls/legend/plots panel is shown
         dcc.Store(id="cc-mode-store", data=True),
+        # True when the screen is phone-sized (set client-side by detect_phone_screen) --
+        # the plots panel doesn't auto-open there, since it covers nearly the whole map
+        dcc.Store(id="is-phone-store", data=None),
 
         ##################################
         # Map fills the full width; controls and plots panel float on top of it
@@ -2479,9 +2482,11 @@ app.layout = html.Div(
                 # Plots panel, slides in over the map. Opens automatically on the Current
                 # Conditions tab (see toggle_right_panels) but can still be closed/reopened
                 # via plots-toggle there, same as on Riverbed Surveys where it starts closed.
+                # Starts closed here so phones (where it doesn't auto-open) never flash it
+                # open on load; toggle_right_panels slides it open on larger screens.
                 html.Div(
                     id="plots-panel",
-                    style=PLOTS_PANEL_OPEN,
+                    style=PLOTS_PANEL_CLOSED,
                     children=[
                         html.Div(
                             style={
@@ -2845,6 +2850,16 @@ def close_constrain_callout(n_clicks):
 # PLOTS PANEL TOGGLE
 # --------------------------------------------------
 
+# Phone-sized screen check, run in the browser on load and on each tab switch (via
+# cc-mode-store). 600px catches every phone in portrait while leaving iPads (744px+)
+# and laptops alone.
+app.clientside_callback(
+    "function(_) { return window.matchMedia('(max-width: 600px)').matches; }",
+    Output("is-phone-store", "data"),
+    Input("cc-mode-store", "data"),
+)
+
+
 @app.callback(
     Output("plots-panel", "style"),
     Output("plots-toggle", "style"),
@@ -2852,17 +2867,23 @@ def close_constrain_callout(n_clicks):
     Output("active-panel-store", "data"),
     Input("plots-toggle", "n_clicks"),
     Input("cc-mode-store", "data"),
+    Input("is-phone-store", "data"),
     State("active-panel-store", "data"),
 )
-def toggle_right_panels(plots_clicks, cc_mode, active_panel):
+def toggle_right_panels(plots_clicks, cc_mode, is_phone, active_panel):
     triggered = dash.ctx.triggered_id
 
     if cc_mode:
         # Current Conditions: the plots panel opens automatically every time this page
         # is (re)entered -- any trigger other than an explicit plots-toggle click (a
-        # fresh "cc-mode-store" switch, or initial load, where triggered_id is None)
-        # forces it back open rather than resuming a closed state from a previous visit.
-        is_open = not (triggered == "plots-toggle" and active_panel == "plots-toggle")
+        # fresh "cc-mode-store"/"is-phone-store" update, or initial load, where
+        # triggered_id is None) forces it back open rather than resuming a closed state
+        # from a previous visit. Except on phones, where it starts closed and is
+        # toggled purely by clicks, same as Historic Conditions below.
+        if is_phone:
+            is_open = triggered == "plots-toggle" and active_panel != "plots-toggle"
+        else:
+            is_open = not (triggered == "plots-toggle" and active_panel == "plots-toggle")
     else:
         # Historic Conditions: starts closed, toggled purely by clicks. Switching into
         # this tab (triggered_id is "cc-mode-store", not a tab click) resets it closed
