@@ -190,7 +190,7 @@ def _derive_futures_price(rows, commodity, month_name):
 
 
 def fetch_futures_settlements():
-    """Pull today's Dec-corn / Nov-soybean CBOT settlement price, derived from
+    """Pull the past week's daily Dec-corn / Nov-soybean CBOT settlement prices, derived from
     the Illinois Grain Bids report's basis quotes via the MARS API. Illinois
     is used only because it matches the IL--Gulf basis convention used
     elsewhere in this pipeline, not because the price is Illinois-specific --
@@ -215,16 +215,19 @@ def fetch_futures_settlements():
     if not rows:
         raise ValueError(f"No Illinois Grain Bids data returned for {date_range}")
 
-    latest_date = max(rows, key=lambda r: pd.to_datetime(r["report_date"]))["report_date"]
-    rows = [r for r in rows if r["report_date"] == latest_date]
-
-    corn_dec = _derive_futures_price(rows, "Corn", "December")
-    soy_nov = _derive_futures_price(rows, "Soybeans", "November")
-    return pd.DataFrame([{
-        "date": pd.to_datetime(rows[0]["report_date"]),
-        "corn_dec_futures": corn_dec,
-        "soy_nov_futures": soy_nov,
-    }])
+    # keep every report day in the window, not just the latest -- a day or two of
+    # missed pipeline runs then backfills itself on the next good run
+    by_date = {}
+    for r in rows:
+        by_date.setdefault(r["report_date"], []).append(r)
+    return pd.DataFrame([
+        {
+            "date": pd.to_datetime(report_date),
+            "corn_dec_futures": _derive_futures_price(day_rows, "Corn", "December"),
+            "soy_nov_futures": _derive_futures_price(day_rows, "Soybeans", "November"),
+        }
+        for report_date, day_rows in by_date.items()
+    ]).sort_values("date")
 
 
 def _merge_and_save(csv_path, new_df, key_col):
