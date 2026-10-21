@@ -393,3 +393,22 @@ body.app-loaded .map-spinner {
         font-size: 8px !important;
     }
 }
+
+/* ==========================================================================
+   Phones (same 600px cutoff as detect_phone_screen in app.py): the plots
+   panel doesn't auto-open here, so when someone taps it open they want the
+   charts -- give it the map's full width instead of the 60% split above
+   (which squeezed each chart to ~190px). Extra right padding keeps the ✕ tab
+   (pinned over the panel's right edge) from covering the charts. Solid
+   background (the desktop one is 97% opaque) so the Layers box underneath
+   doesn't ghost through -- #f7f7f7 is what that 97% white looks like over
+   the dark map anyway.
+   ========================================================================== */
+@media (max-width: 600px) {
+    #plots-panel[style*="400px"] {
+        background: #f7f7f7 !important;
+        width: 100% !important;
+        box-sizing: border-box !important;
+        padding: 16px 34px 16px 12px !important;
+    }
+}
